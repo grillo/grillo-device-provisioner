@@ -8,6 +8,7 @@ set -e  # Exit on any error
 # Configuration
 API_SERVER="http://localhost:8080"
 CSV_FILE="devices.csv"
+ESPTOOL="python3 -m esptool"
 
 # Flags (disabled by default)
 PRINT_LABEL=false
@@ -43,12 +44,12 @@ log() {
 find_esp32_port() {
     log "Searching for ESP32 device..."
     
-    # Look for common ESP32 USB devices
-    for port in /dev/ttyUSB* /dev/ttyACM*; do
+    # Look for common ESP32 USB devices (Linux and macOS)
+    for port in /dev/ttyUSB* /dev/ttyACM* /dev/tty.usbserial*; do
         if [ -e "$port" ]; then
             log "Found potential device: $port"
             # Test if we can communicate with esptool
-            if esptool --port "$port" chip_id >/dev/null 2>&1; then
+            if $ESPTOOL --port "$port" chip_id >/dev/null 2>&1; then
                 log "Confirmed ESP32 device at: $port"
                 echo "$port"
                 return 0
@@ -68,7 +69,7 @@ get_mac_address() {
     
     # Use esptool to read MAC address
     local mac_output
-    mac_output=$(esptool --port "$device_port" read-mac 2>&1)
+    mac_output=$($ESPTOOL --port "$device_port" read_mac 2>&1)
     
     if [ $? -ne 0 ]; then
         log "ERROR: Failed to read MAC address: $mac_output"

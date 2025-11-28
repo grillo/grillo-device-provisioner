@@ -41,7 +41,7 @@ Reads the MAC address from a connected ESP32 device. Optionally registers it wit
 
 ## How it Works
 
-1. **Device Detection**: Scans `/dev/ttyUSB*` and `/dev/ttyACM*` for ESP32 devices (or uses specified port)
+1. **Device Detection**: Scans `/dev/ttyUSB*`, `/dev/ttyACM*`, and `/dev/tty.usbserial*` for ESP32 devices (or uses specified port)
 2. **MAC Address Reading**: Uses `esptool read-mac` to get the device's MAC address
 3. **Optional Actions** (based on flags):
    - `-r`: Sends HTTP POST to register device in inventory
@@ -54,6 +54,12 @@ Reads the MAC address from a connected ESP32 device. Optionally registers it wit
 - `labelle` - for printing labels (only if using `-p`)
 - `curl` - for device registration (only if using `-r`)
 - ESP32-S3 device connected via USB
+
+### Installing esptool
+
+```bash
+pip install esptool
+```
 
 ## Configuration
 
