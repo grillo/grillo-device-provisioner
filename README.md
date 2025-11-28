@@ -1,6 +1,6 @@
-# ESP32-S3 Device ID Reader
+# ESP32 Device ID Reader
 
-Reads the MAC address from a connected ESP32-S3 device. Optionally registers it with a backend API, appends to a CSV file, and/or prints a label.
+Reads the MAC address from a connected ESP32 device. Optionally registers it with a backend API, appends to a CSV file, and/or prints a label.
 
 ## Usage
 
