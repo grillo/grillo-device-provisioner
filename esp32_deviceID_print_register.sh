@@ -7,6 +7,32 @@ set -e  # Exit on any error
 
 # Configuration
 API_SERVER="http://localhost:8080"
+CSV_FILE="devices.csv"
+
+# Flags (disabled by default)
+PRINT_LABEL=false
+REGISTER_API=false
+APPEND_CSV=false
+
+# Function to show usage
+usage() {
+    echo "Usage: $0 [OPTIONS] [device_port]"
+    echo ""
+    echo "Options:"
+    echo "  -p, --print       Print label with MAC address and QR code"
+    echo "  -r, --register    Register device with API server"
+    echo "  -c, --csv [FILE]  Append device ID to CSV file (default: devices.csv)"
+    echo "  -h, --help        Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0                          # Just read MAC address"
+    echo "  $0 -p                       # Read MAC and print label"
+    echo "  $0 -r -p                    # Read MAC, register, and print"
+    echo "  $0 -c                       # Read MAC and append to devices.csv"
+    echo "  $0 -c mydevices.csv         # Read MAC and append to mydevices.csv"
+    echo "  $0 -p -r -c /dev/ttyUSB0    # All options with specific port"
+    exit 0
+}
 
 # Function to log messages
 log() {
@@ -99,16 +125,16 @@ register_device() {
 # Function to print label
 print_label() {
     local mac_address="$1"
-    
+
     log "Printing label for MAC: $mac_address"
-    
+
     # Print label with MAC address text and QR code using batch mode
     cat << EOF | labelle --batch --font-scale 40
 LABELLE-LABEL-SPEC-VERSION:1
 QR:$mac_address
 TEXT:$mac_address
 EOF
-    
+
     if [ $? -eq 0 ]; then
         log "Label printed successfully!"
     else
@@ -117,44 +143,118 @@ EOF
     fi
 }
 
+# Function to append device ID to CSV
+append_to_csv() {
+    local device_id="$1"
+    local csv_file="$2"
+
+    # Create CSV with header if it doesn't exist
+    if [ ! -f "$csv_file" ]; then
+        echo "device_id,timestamp" > "$csv_file"
+        log "Created new CSV file: $csv_file"
+    fi
+
+    # Append device ID with timestamp
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "$device_id,$timestamp" >> "$csv_file"
+
+    log "Appended device $device_id to $csv_file"
+}
+
+# Parse command line arguments
+parse_args() {
+    local device_port=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -p|--print)
+                PRINT_LABEL=true
+                shift
+                ;;
+            -r|--register)
+                REGISTER_API=true
+                shift
+                ;;
+            -c|--csv)
+                APPEND_CSV=true
+                shift
+                # Check if next argument is a filename (not starting with -)
+                if [[ $# -gt 0 && ! "$1" =~ ^- && ! "$1" =~ ^/dev/ ]]; then
+                    CSV_FILE="$1"
+                    shift
+                fi
+                ;;
+            -h|--help)
+                usage
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                usage
+                ;;
+            *)
+                # Assume it's the device port
+                device_port="$1"
+                shift
+                ;;
+        esac
+    done
+
+    echo "$device_port"
+}
+
 # Main function
 main() {
-    local device_port="$1"
-    
-    log "Starting ESP32 label printing..."
-    
+    local device_port
+    device_port=$(parse_args "$@")
+
+    log "Starting ESP32 device processing..."
+
     # If no port specified, try to find one automatically
     if [ -z "$device_port" ]; then
         device_port=$(find_esp32_port)
         if [ $? -ne 0 ]; then
-            echo "Usage: $0 [device_port]"
-            echo "Example: $0 /dev/ttyUSB0"
-            echo "Or just run: $0 (will auto-detect)"
-            exit 1
+            usage
         fi
     fi
-    
+
     log "Using device port: $device_port"
-    
+
     # Wait a moment for device to be ready
     sleep 1
-    
+
     # Get MAC address
     local mac_address
     mac_address=$(get_mac_address "$device_port")
-    
+
     if [ $? -ne 0 ] || [ -z "$mac_address" ]; then
         log "ERROR: Failed to get MAC address"
         exit 1
     fi
-    
-    # Add device to inventory (use MAC as device_id)
-    register_device "$mac_address"
-    
-    # Print label
-    print_label "$mac_address"
-    
+
+    # Register device with API if requested
+    if [ "$REGISTER_API" = true ]; then
+        register_device "$mac_address"
+    else
+        log "Skipping API registration (use -r to enable)"
+    fi
+
+    # Append to CSV if requested
+    if [ "$APPEND_CSV" = true ]; then
+        append_to_csv "$mac_address" "$CSV_FILE"
+    else
+        log "Skipping CSV append (use -c to enable)"
+    fi
+
+    # Print label if requested
+    if [ "$PRINT_LABEL" = true ]; then
+        print_label "$mac_address"
+    else
+        log "Skipping label printing (use -p to enable)"
+    fi
+
     log "ESP32 processing completed for MAC: $mac_address"
+    echo "$mac_address"
 }
 
 # Run main function with all arguments
