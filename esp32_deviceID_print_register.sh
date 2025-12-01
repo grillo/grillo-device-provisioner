@@ -148,11 +148,13 @@ EOF
 append_to_csv() {
     local device_id="$1"
     local csv_file="$2"
+    local full_path
+    full_path=$(cd "$(dirname "$csv_file")" 2>/dev/null && pwd)/$(basename "$csv_file")
 
     # Create CSV with header if it doesn't exist
     if [ ! -f "$csv_file" ]; then
         echo "device_id,timestamp" > "$csv_file"
-        log "Created new CSV file: $csv_file"
+        log "Created new CSV file: $full_path"
     fi
 
     # Append device ID with timestamp
@@ -160,12 +162,12 @@ append_to_csv() {
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$device_id,$timestamp" >> "$csv_file"
 
-    log "Appended device $device_id to $csv_file"
+    log "Appended device $device_id to $full_path"
 }
 
-# Parse command line arguments
+# Parse command line arguments (sets global DEVICE_PORT)
 parse_args() {
-    local device_port=""
+    DEVICE_PORT=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -195,19 +197,17 @@ parse_args() {
                 ;;
             *)
                 # Assume it's the device port
-                device_port="$1"
+                DEVICE_PORT="$1"
                 shift
                 ;;
         esac
     done
-
-    echo "$device_port"
 }
 
 # Main function
 main() {
-    local device_port
-    device_port=$(parse_args "$@")
+    parse_args "$@"
+    local device_port="$DEVICE_PORT"
 
     log "Starting ESP32 device processing..."
 
