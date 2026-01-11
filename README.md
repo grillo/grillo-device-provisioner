@@ -27,7 +27,9 @@ Features:
 - Read device ID (MAC address)
 - Print label, register with API, save to CSV
 - Flash firmware with device type selection
-- Serial monitor to view device output
+- Serial monitor with simplified device status view
+- Status badges: Active, Connection type, TimeSync, ADXL, ADS, Messaging, Data
+- Reset device button (hardware reset via DTR/RTS)
 - Auto-detects new devices on port refresh
 
 ## Usage
