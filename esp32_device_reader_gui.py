@@ -10,6 +10,9 @@ import threading
 import sys
 import time
 import re
+import os
+import subprocess
+from pathlib import Path
 
 # Try CustomTkinter first, fall back to standard tkinter
 try:
@@ -33,7 +36,6 @@ from esp32_device_reader import (
     append_to_csv,
     flash_firmware,
     DEFAULT_CSV_FILE,
-    DEFAULT_FIRMWARE_DIR,
     DEVICE_CONFIGS,
     DEFAULT_DEVICE_TYPE,
     DEFAULT_BAUD_RATE,
@@ -48,12 +50,15 @@ try:
 except ImportError:
     HAS_PYSERIAL = False
 
+# S3 firmware bucket
+S3_FIRMWARE_BUCKET = "s3://grillo.firmware"
+
 
 class ESP32ReaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Grillo Device Provisioner")
-        self.root.minsize(520, 780)
+        self.root.minsize(600, 780)
 
         # Variables
         self.port_var = ctk.StringVar() if HAS_CUSTOMTKINTER else tk.StringVar()
@@ -64,9 +69,12 @@ class ESP32ReaderApp:
         self.csv_var = ctk.BooleanVar() if HAS_CUSTOMTKINTER else tk.BooleanVar()
         self.csv_file_var = ctk.StringVar(value=DEFAULT_CSV_FILE) if HAS_CUSTOMTKINTER else tk.StringVar(value=DEFAULT_CSV_FILE)
         self.flash_var = ctk.BooleanVar() if HAS_CUSTOMTKINTER else tk.BooleanVar()
-        self.firmware_dir_var = ctk.StringVar(value=DEFAULT_FIRMWARE_DIR) if HAS_CUSTOMTKINTER else tk.StringVar(value=DEFAULT_FIRMWARE_DIR)
+        default_firmware_dir = str(Path.home() / "Desktop")
+        self.firmware_dir_var = ctk.StringVar(value=default_firmware_dir) if HAS_CUSTOMTKINTER else tk.StringVar(value=default_firmware_dir)
         self.device_id_var = ctk.StringVar(value="—") if HAS_CUSTOMTKINTER else tk.StringVar(value="—")
         self.status_var = ctk.StringVar(value="Ready") if HAS_CUSTOMTKINTER else tk.StringVar(value="Ready")
+        self.firmware_version_var = ctk.StringVar(value="") if HAS_CUSTOMTKINTER else tk.StringVar(value="")
+        self.firmware_versions = []  # Available S3 versions
 
         # Serial monitoring
         self.serial_thread = None
@@ -76,7 +84,7 @@ class ESP32ReaderApp:
         self.known_ports = set()
 
         self.create_widgets()
-        self.refresh_ports()
+        self.on_device_type_change()  # Set initial firmware folder and refresh
 
     def create_widgets(self):
         if HAS_CUSTOMTKINTER:
@@ -102,15 +110,11 @@ class ESP32ReaderApp:
         self.port_combo.pack(side="left", padx=5)
         ctk.CTkButton(port_frame, text="Refresh", command=self.refresh_ports, width=80).pack(side="left", padx=5)
 
-        # Device type frame
-        type_frame = ctk.CTkFrame(main)
-        type_frame.pack(fill="x", pady=5)
-
-        ctk.CTkLabel(type_frame, text="Device Type:", width=100, anchor="w").pack(side="left", padx=5)
-        self.type_combo = ctk.CTkComboBox(type_frame, variable=self.device_type_var,
-                                          values=list(DEVICE_CONFIGS.keys()), width=200, state="readonly",
-                                          command=lambda _: self.refresh_ports())
-        self.type_combo.pack(side="left", padx=5)
+        # Driver hint (shown when no ports found)
+        self.driver_hint = ctk.CTkLabel(main, text="Connect a Grillo device. If not detected, install USB driver: CP210x or CH340",
+                                        font=ctk.CTkFont(size=11), text_color="gray")
+        self.driver_hint.pack(anchor="w", padx=5)
+        self.driver_hint.pack_forget()  # Hidden by default
 
         # Options frame
         options = ctk.CTkFrame(main)
@@ -124,7 +128,7 @@ class ESP32ReaderApp:
         # CSV option
         csv_frame = ctk.CTkFrame(options, fg_color="transparent")
         csv_frame.pack(fill="x", padx=20, pady=2)
-        ctk.CTkCheckBox(csv_frame, text="Save to CSV:", variable=self.csv_var, width=120).pack(side="left")
+        ctk.CTkCheckBox(csv_frame, text="Append to CSV:", variable=self.csv_var, width=120).pack(side="left")
         ctk.CTkEntry(csv_frame, textvariable=self.csv_file_var, width=150).pack(side="left", padx=5)
         ctk.CTkButton(csv_frame, text="...", command=self.browse_csv, width=30).pack(side="left")
 
@@ -134,6 +138,24 @@ class ESP32ReaderApp:
         ctk.CTkCheckBox(flash_frame, text="Flash firmware:", variable=self.flash_var, width=120).pack(side="left")
         ctk.CTkEntry(flash_frame, textvariable=self.firmware_dir_var, width=150).pack(side="left", padx=5)
         ctk.CTkButton(flash_frame, text="...", command=self.browse_firmware, width=30).pack(side="left")
+
+        # Firmware selector: device type + version dropdown + refresh
+        firmware_frame = ctk.CTkFrame(options, fg_color="transparent")
+        firmware_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(firmware_frame, text="Firmware:", width=120, anchor="w").pack(side="left")
+        self.pulse_btn = ctk.CTkButton(firmware_frame, text="Pulse", width=80, command=lambda: self.select_device_type("pulse"))
+        self.pulse_btn.pack(side="left", padx=2)
+        self.one_btn = ctk.CTkButton(firmware_frame, text="One", width=80, command=lambda: self.select_device_type("one"))
+        self.one_btn.pack(side="left", padx=2)
+        self.version_combo = ctk.CTkComboBox(firmware_frame, variable=self.firmware_version_var, width=100, state="readonly")
+        self.version_combo.pack(side="left", padx=(10, 2))
+        ctk.CTkButton(firmware_frame, text="Refresh", command=self.refresh_firmware_versions, width=60).pack(side="left", padx=2)
+
+        # Download button
+        download_frame = ctk.CTkFrame(options, fg_color="transparent")
+        download_frame.pack(fill="x", padx=20, pady=2)
+        ctk.CTkLabel(download_frame, text="", width=120).pack(side="left")  # Spacer to align with above
+        ctk.CTkButton(download_frame, text="Download from S3", command=self.download_firmware, width=150).pack(side="left", padx=2)
 
         # Baud rate
         baud_frame = ctk.CTkFrame(options, fg_color="transparent")
@@ -178,7 +200,7 @@ class ESP32ReaderApp:
         badge_frame.pack(fill="x", padx=10, pady=5)
 
         self.badges = {}
-        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data"]
+        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data", "OTA"]
         for name in badge_names:
             badge = ctk.CTkLabel(badge_frame, text=name, fg_color="gray40", corner_radius=5,
                                  padx=8, pady=2, font=ctk.CTkFont(size=11))
@@ -188,19 +210,20 @@ class ESP32ReaderApp:
         self.status_text = ctk.CTkTextbox(status_log_frame, font=ctk.CTkFont(family="Consolas", size=11), height=80)
         self.status_text.pack(fill="x", padx=10, pady=5)
 
-        # Log frame (collapsible)
+        # Log frame (collapsible, hidden by default)
         self.log_frame = ctk.CTkFrame(main)
         self.log_frame.pack(fill="both", expand=True, pady=5)
-        self.log_visible = True
+        self.log_visible = False
 
         log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
         log_header.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(log_header, text="Serial Log", font=ctk.CTkFont(weight="bold")).pack(side="left")
-        self.collapse_btn = ctk.CTkButton(log_header, text="Hide", command=self.toggle_log_visibility, width=50)
+        self.collapse_btn = ctk.CTkButton(log_header, text="Show", command=self.toggle_log_visibility, width=50)
         self.collapse_btn.pack(side="right")
+        ctk.CTkButton(log_header, text="Copy", command=self.copy_serial_log, width=50).pack(side="right", padx=5)
 
         self.log_content = ctk.CTkFrame(self.log_frame, fg_color="transparent")
-        self.log_content.pack(fill="both", expand=True)
+        # Don't pack log_content - hidden by default
 
         self.log_text = ctk.CTkTextbox(self.log_content, font=ctk.CTkFont(family="Consolas", size=11))
         self.log_text.pack(fill="both", expand=True, padx=10, pady=5)
@@ -227,23 +250,22 @@ class ESP32ReaderApp:
         self.port_combo.pack(side="left", padx=(0, 5))
         ttk.Button(port_frame, text="Refresh", command=self.refresh_ports).pack(side="left")
 
-        # Device type
-        ttk.Label(main, text="Device Type:").grid(row=1, column=0, sticky="w")
-        self.type_combo = ttk.Combobox(main, textvariable=self.device_type_var,
-                                        values=list(DEVICE_CONFIGS.keys()), state="readonly")
-        self.type_combo.grid(row=1, column=1, sticky="w", pady=5)
-        self.type_combo.bind("<<ComboboxSelected>>", lambda _: self.refresh_ports())
+        # Driver hint (shown when no ports found)
+        self.driver_hint = ttk.Label(main, text="Connect a Grillo device. If not detected, install USB driver: CP210x or CH340",
+                                     foreground="gray")
+        self.driver_hint.grid(row=0, column=1, sticky="w", pady=(25, 0))
+        self.driver_hint.grid_remove()  # Hidden by default
 
         # Options
         options = ttk.LabelFrame(main, text="Options", padding=10)
-        options.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
+        options.grid(row=1, column=0, columnspan=2, sticky="ew", pady=10)
 
         ttk.Checkbutton(options, text="Print label", variable=self.print_var).grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(options, text="Register with API", variable=self.register_var).grid(row=1, column=0, sticky="w")
 
         csv_frame = ttk.Frame(options)
         csv_frame.grid(row=2, column=0, sticky="w")
-        ttk.Checkbutton(csv_frame, text="Save to CSV:", variable=self.csv_var).pack(side="left")
+        ttk.Checkbutton(csv_frame, text="Append to CSV:", variable=self.csv_var).pack(side="left")
         ttk.Entry(csv_frame, textvariable=self.csv_file_var, width=15).pack(side="left", padx=5)
         ttk.Button(csv_frame, text="...", command=self.browse_csv, width=3).pack(side="left")
 
@@ -253,19 +275,37 @@ class ESP32ReaderApp:
         ttk.Entry(flash_frame, textvariable=self.firmware_dir_var, width=15).pack(side="left", padx=5)
         ttk.Button(flash_frame, text="...", command=self.browse_firmware, width=3).pack(side="left")
 
+        # Firmware selector: device type + version dropdown + refresh
+        firmware_frame = ttk.Frame(options)
+        firmware_frame.grid(row=4, column=0, sticky="w", pady=5)
+        ttk.Label(firmware_frame, text="Firmware:").pack(side="left")
+        self.pulse_btn = ttk.Button(firmware_frame, text="Pulse", width=8, command=lambda: self.select_device_type("pulse"))
+        self.pulse_btn.pack(side="left", padx=2)
+        self.one_btn = ttk.Button(firmware_frame, text="One", width=8, command=lambda: self.select_device_type("one"))
+        self.one_btn.pack(side="left", padx=2)
+        self.version_combo = ttk.Combobox(firmware_frame, textvariable=self.firmware_version_var, width=10, state="readonly")
+        self.version_combo.pack(side="left", padx=(10, 2))
+        ttk.Button(firmware_frame, text="Refresh", command=self.refresh_firmware_versions, width=7).pack(side="left", padx=2)
+
+        # Download button
+        download_frame = ttk.Frame(options)
+        download_frame.grid(row=5, column=0, sticky="w", pady=2)
+        ttk.Label(download_frame, text="", width=10).pack(side="left")  # Spacer
+        ttk.Button(download_frame, text="Download from S3", command=self.download_firmware, width=18).pack(side="left", padx=2)
+
         baud_frame = ttk.Frame(options)
-        baud_frame.grid(row=4, column=0, sticky="w")
+        baud_frame.grid(row=6, column=0, sticky="w")
         ttk.Label(baud_frame, text="Flash baud rate:").pack(side="left")
         ttk.Combobox(baud_frame, textvariable=self.baud_rate_var,
                      values=[str(b) for b in BAUD_RATES], width=10, state="readonly").pack(side="left", padx=5)
 
         # Start button
         self.start_btn = ttk.Button(main, text="Start", command=self.process_device)
-        self.start_btn.grid(row=3, column=0, columnspan=2, pady=10, sticky="ew")
+        self.start_btn.grid(row=2, column=0, columnspan=2, pady=10, sticky="ew")
 
         # Device ID
         id_container = ttk.LabelFrame(main, text="Device ID", padding=10)
-        id_container.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
+        id_container.grid(row=3, column=0, columnspan=2, sticky="ew", pady=5)
 
         id_frame = ttk.Frame(id_container)
         id_frame.pack(fill="x")
@@ -275,7 +315,7 @@ class ESP32ReaderApp:
 
         # Device status (simplified log)
         status_log_frame = ttk.LabelFrame(main, text="Device Status", padding=10)
-        status_log_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+        status_log_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
 
         # Monitor buttons at top
         monitor_btn_frame = ttk.Frame(status_log_frame)
@@ -290,7 +330,7 @@ class ESP32ReaderApp:
         badge_frame.pack(fill="x", pady=5)
 
         self.badges = {}
-        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data"]
+        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data", "OTA"]
         for name in badge_names:
             badge = ttk.Label(badge_frame, text=name, background="gray", foreground="white",
                               padding=(5, 2))
@@ -300,27 +340,28 @@ class ESP32ReaderApp:
         self.status_text = scrolledtext.ScrolledText(status_log_frame, height=4, font=("Consolas", 9))
         self.status_text.pack(fill="x", expand=False)
 
-        # Log (collapsible)
+        # Log (collapsible, hidden by default)
         self.log_frame = ttk.LabelFrame(main, text="Serial Log", padding=10)
-        self.log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=5)
-        main.rowconfigure(6, weight=1)
+        self.log_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=5)
+        main.rowconfigure(5, weight=1)
         main.columnconfigure(1, weight=1)
-        self.log_visible = True
+        self.log_visible = False
 
         log_header = ttk.Frame(self.log_frame)
         log_header.pack(fill="x")
-        self.collapse_btn = ttk.Button(log_header, text="Hide", command=self.toggle_log_visibility, width=6)
+        self.collapse_btn = ttk.Button(log_header, text="Show", command=self.toggle_log_visibility, width=6)
         self.collapse_btn.pack(side="right")
+        ttk.Button(log_header, text="Copy", command=self.copy_serial_log, width=6).pack(side="right", padx=5)
 
         self.log_content = ttk.Frame(self.log_frame)
-        self.log_content.pack(fill="both", expand=True)
+        # Don't pack log_content - hidden by default
 
         self.log_text = scrolledtext.ScrolledText(self.log_content, height=8, font=("Consolas", 9))
         self.log_text.pack(fill="both", expand=True)
 
         # Status
         status_frame = ttk.Frame(main)
-        status_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
+        status_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
         ttk.Label(status_frame, text="Status:").pack(side="left")
         self.status_label = ttk.Label(status_frame, textvariable=self.status_var, foreground="gray")
         self.status_label.pack(side="left", padx=5)
@@ -345,6 +386,19 @@ class ESP32ReaderApp:
         new_ports = current_ports - self.known_ports
         self.known_ports = current_ports
 
+        # Show/hide driver hint based on ports found
+        if hasattr(self, 'driver_hint'):
+            if not ports:
+                if HAS_CUSTOMTKINTER:
+                    self.driver_hint.pack(anchor="w", padx=5, after=self.port_combo.master)
+                else:
+                    self.driver_hint.grid()
+            else:
+                if HAS_CUSTOMTKINTER:
+                    self.driver_hint.pack_forget()
+                else:
+                    self.driver_hint.grid_remove()
+
         if new_ports:
             # Auto-select the new port
             new_port = sorted(new_ports)[0]
@@ -353,6 +407,8 @@ class ESP32ReaderApp:
         elif ports and not self.port_var.get():
             self.port_var.set(ports[0])
             self.set_status(f"Found {len(ports)} port(s)")
+        elif not ports:
+            self.set_status("No ports found")
         else:
             self.set_status(f"Found {len(ports)} port(s)")
 
@@ -374,6 +430,142 @@ class ESP32ReaderApp:
         )
         if dirname:
             self.firmware_dir_var.set(dirname)
+
+    def select_device_type(self, device_type):
+        """Select device type and update button appearance."""
+        self.device_type_var.set(device_type)
+        self.update_device_type_buttons()
+        self.on_device_type_change()
+
+    def update_device_type_buttons(self):
+        """Update device type button appearance based on selection."""
+        if not hasattr(self, 'pulse_btn'):
+            return  # Buttons not created yet
+        device_type = self.device_type_var.get()
+        if HAS_CUSTOMTKINTER:
+            # Selected button is highlighted, other is dimmed
+            if device_type == "pulse":
+                self.pulse_btn.configure(fg_color=("green", "green"))
+                self.one_btn.configure(fg_color=("gray50", "gray30"))
+            else:
+                self.pulse_btn.configure(fg_color=("gray50", "gray30"))
+                self.one_btn.configure(fg_color=("green", "green"))
+        # ttk doesn't support easy color changes, button text indicates selection
+
+    def on_device_type_change(self):
+        """Handle device type change - refresh ports and versions."""
+        self.update_device_type_buttons()
+        self.refresh_ports()
+        self.refresh_firmware_versions()
+
+    def refresh_firmware_versions(self):
+        """Fetch available firmware versions from S3."""
+        device_type = self.device_type_var.get()
+        s3_path = f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/"
+
+        def fetch_versions():
+            try:
+                # Hide console window on Windows
+                kwargs = {"capture_output": True, "text": True, "timeout": 10}
+                if sys.platform == "win32":
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                result = subprocess.run(["aws", "s3", "ls", s3_path], **kwargs)
+                if result.returncode != 0:
+                    self.root.after(0, lambda: self.set_status("Failed to list S3 versions", "red"))
+                    return
+
+                versions = []
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip() and "PRE" in line:
+                        # Parse "PRE 1.0.0/" format
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            version = parts[-1].rstrip("/")
+                            versions.append(version)
+
+                versions.sort(key=lambda v: [int(x) if x.isdigit() else x for x in v.split(".")], reverse=True)
+                self.firmware_versions = versions
+
+                def update_ui():
+                    if HAS_CUSTOMTKINTER:
+                        self.version_combo.configure(values=versions)
+                    else:
+                        self.version_combo["values"] = versions
+                    if versions:
+                        # Default to 1.0.0 if available, otherwise first in list
+                        default_version = "1.0.0" if "1.0.0" in versions else versions[0]
+                        self.firmware_version_var.set(default_version)
+                        self.set_status(f"Found {len(versions)} firmware versions", "green")
+                    else:
+                        self.set_status("No firmware versions found", "gray")
+
+                self.root.after(0, update_ui)
+
+            except FileNotFoundError:
+                self.root.after(0, lambda: self.set_status("AWS CLI not found", "red"))
+            except subprocess.TimeoutExpired:
+                self.root.after(0, lambda: self.set_status("S3 request timed out", "red"))
+            except Exception as e:
+                self.root.after(0, lambda: self.set_status(f"Error: {e}", "red"))
+
+        self.set_status("Fetching firmware versions...", "blue")
+        threading.Thread(target=fetch_versions, daemon=True).start()
+
+    def download_firmware(self):
+        """Download selected firmware version from S3, including bootloader and partition table."""
+        version = self.firmware_version_var.get()
+        if not version:
+            self.set_status("Select a firmware version first", "red")
+            return
+
+        device_type = self.device_type_var.get()
+        base_dir = self.firmware_dir_var.get()
+
+        # Create device-type and version subfolder (e.g., firmware/pulse/1.0.0/)
+        local_dir = Path(base_dir) / device_type / version
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        # Files to download: firmware (versioned) + bootloader & partition (device-level)
+        firmware_name = f"grillo-{device_type}-firmware.bin"
+        downloads = [
+            (f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/{version}/{firmware_name}", firmware_name),
+            (f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/bootloader.bin", "bootloader.bin"),
+            (f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/partition-table.bin", "partition-table.bin"),
+        ]
+
+        def do_download():
+            try:
+                kwargs = {"capture_output": True, "text": True, "timeout": 60}
+                if sys.platform == "win32":
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+                success_count = 0
+                for s3_source, filename in downloads:
+                    local_path = Path(local_dir) / filename
+                    result = subprocess.run(["aws", "s3", "cp", s3_source, str(local_path)], **kwargs)
+                    if result.returncode == 0:
+                        success_count += 1
+                        self.root.after(0, lambda f=filename: self.log_message(f"[INFO] Downloaded {f}"))
+                    else:
+                        self.root.after(0, lambda f=filename, e=result.stderr: self.log_message(f"[WARN] Failed to download {f}: {e}"))
+
+                if success_count == len(downloads):
+                    # Update firmware_dir_var to point to the subfolder with downloaded files
+                    new_path = str(local_dir)
+                    self.root.after(0, lambda p=new_path: self.firmware_dir_var.set(p))
+                    self.root.after(0, lambda: self.set_status(f"Downloaded all files for {device_type} v{version}", "green"))
+                else:
+                    self.root.after(0, lambda: self.set_status(f"Downloaded {success_count}/{len(downloads)} files", "orange"))
+
+            except FileNotFoundError:
+                self.root.after(0, lambda: self.set_status("AWS CLI not found", "red"))
+            except subprocess.TimeoutExpired:
+                self.root.after(0, lambda: self.set_status("Download timed out", "red"))
+            except Exception as e:
+                self.root.after(0, lambda: self.set_status(f"Error: {e}", "red"))
+
+        self.set_status(f"Downloading {device_type} v{version}...", "blue")
+        threading.Thread(target=do_download, daemon=True).start()
 
     def set_status(self, message, color="gray"):
         """Update status message."""
@@ -500,6 +692,15 @@ class ESP32ReaderApp:
         if "[JSON]:" in line and ("geo=" in line or "ax=" in line):
             self.root.after(0, lambda: self.set_badge("Data", True))
             return "Sending data..."
+        # OTA update
+        if "OTA" in line and ("start" in line.lower() or "begin" in line.lower()):
+            self.root.after(0, lambda: self.set_badge("OTA", True))
+            return "OTA update starting..."
+        if "OTA" in line and ("success" in line.lower() or "complete" in line.lower() or "done" in line.lower()):
+            self.root.after(0, lambda: self.set_badge("OTA", True))
+            return "OTA update complete"
+        if "OTA" in line and ("fail" in line.lower() or "error" in line.lower()):
+            return "OTA update failed"
         return None
 
     def copy_device_id(self):
@@ -509,6 +710,19 @@ class ESP32ReaderApp:
             self.root.clipboard_clear()
             self.root.clipboard_append(device_id)
             self.set_status("Copied to clipboard!", "green")
+
+    def copy_serial_log(self):
+        """Copy serial log contents to clipboard."""
+        if HAS_CUSTOMTKINTER:
+            log_content = self.log_text.get("1.0", "end-1c")
+        else:
+            log_content = self.log_text.get("1.0", "end-1c")
+        if log_content.strip():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(log_content)
+            self.set_status("Log copied to clipboard!", "green")
+        else:
+            self.set_status("Log is empty", "gray")
 
     def reset_device(self):
         """Reset the ESP32 device via DTR/RTS pins."""
@@ -547,15 +761,21 @@ class ESP32ReaderApp:
             self.start_monitor()
 
     def toggle_log_visibility(self):
-        """Toggle serial log visibility."""
+        """Toggle serial log visibility and resize window."""
         if self.log_visible:
             self.log_content.pack_forget()
             self.collapse_btn.configure(text="Show")
             self.log_visible = False
+            # Collapse window height
+            self.root.update_idletasks()
+            self.root.geometry(f"{self.root.winfo_width()}x{self.root.winfo_reqheight()}")
         else:
             self.log_content.pack(fill="both", expand=True)
             self.collapse_btn.configure(text="Hide")
             self.log_visible = True
+            # Restore window height
+            self.root.update_idletasks()
+            self.root.geometry("")  # Reset to natural size
 
     def toggle_monitor(self):
         """Toggle serial monitor on/off."""
