@@ -58,7 +58,7 @@ class ESP32ReaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Grillo Device Provisioner")
-        self.root.minsize(600, 780)
+        self.root.minsize(580, 650)
 
         # Variables
         self.port_var = ctk.StringVar() if HAS_CUSTOMTKINTER else tk.StringVar()
@@ -94,16 +94,25 @@ class ESP32ReaderApp:
 
     def _create_ctk_widgets(self):
         """Create modern CustomTkinter widgets."""
-        # Main frame
-        main = ctk.CTkFrame(self.root)
-        main.pack(fill="both", expand=True, padx=15, pady=15)
+        # Store window dimensions
+        self.main_width = 550
+        self.panel_width = 800
+        self.log_panel_visible = False
+
+        # Container for horizontal layout
+        container = ctk.CTkFrame(self.root)
+        container.pack(fill="both", expand=True)
+
+        # Left panel (main controls)
+        left_panel = ctk.CTkFrame(container)
+        left_panel.pack(side="left", fill="both", expand=True, padx=15, pady=15)
 
         # Title
-        ctk.CTkLabel(main, text="Grillo Device Provisioner", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(0, 15))
+        ctk.CTkLabel(left_panel, text="Grillo Device Provisioner", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(0, 15))
 
         # Port selection frame
-        port_frame = ctk.CTkFrame(main)
-        port_frame.pack(fill="x", pady=5)
+        port_frame = ctk.CTkFrame(left_panel)
+        port_frame.pack(fill="x", padx=10, pady=5)
 
         ctk.CTkLabel(port_frame, text="Device Port:", width=100, anchor="w").pack(side="left", padx=5)
         self.port_combo = ctk.CTkComboBox(port_frame, variable=self.port_var, width=200)
@@ -111,14 +120,14 @@ class ESP32ReaderApp:
         ctk.CTkButton(port_frame, text="Refresh", command=self.refresh_ports, width=80).pack(side="left", padx=5)
 
         # Driver hint (shown when no ports found)
-        self.driver_hint = ctk.CTkLabel(main, text="Connect a Grillo device. If not detected, install USB driver: CP210x or CH340",
+        self.driver_hint = ctk.CTkLabel(left_panel, text="Connect a Grillo device. If not detected, install USB driver: CP210x or CH340",
                                         font=ctk.CTkFont(size=11), text_color="gray")
-        self.driver_hint.pack(anchor="w", padx=5)
+        self.driver_hint.pack(anchor="w", padx=15)
         self.driver_hint.pack_forget()  # Hidden by default
 
         # Options frame
-        options = ctk.CTkFrame(main)
-        options.pack(fill="x", pady=10)
+        options = ctk.CTkFrame(left_panel)
+        options.pack(fill="x", padx=10, pady=10)
 
         ctk.CTkLabel(options, text="Options", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
 
@@ -165,13 +174,13 @@ class ESP32ReaderApp:
                         values=[str(b) for b in BAUD_RATES], width=100, state="readonly").pack(side="left", padx=5)
 
         # Start button
-        self.start_btn = ctk.CTkButton(main, text="Start", command=self.process_device,
+        self.start_btn = ctk.CTkButton(left_panel, text="Start", command=self.process_device,
                                         height=40, font=ctk.CTkFont(size=14, weight="bold"))
-        self.start_btn.pack(fill="x", pady=15)
+        self.start_btn.pack(fill="x", padx=10, pady=15)
 
         # Device ID frame
-        id_container = ctk.CTkFrame(main)
-        id_container.pack(fill="x", pady=5)
+        id_container = ctk.CTkFrame(left_panel)
+        id_container.pack(fill="x", padx=10, pady=5)
 
         id_frame = ctk.CTkFrame(id_container, fg_color="transparent")
         id_frame.pack(fill="x", padx=10, pady=10)
@@ -182,25 +191,15 @@ class ESP32ReaderApp:
         ctk.CTkButton(id_frame, text="Copy", command=self.copy_device_id, width=60).pack(side="right")
 
         # Device status frame (simplified log)
-        status_log_frame = ctk.CTkFrame(main)
-        status_log_frame.pack(fill="x", pady=5)
-
-        # Monitor buttons at top
-        monitor_btn_frame = ctk.CTkFrame(status_log_frame, fg_color="transparent")
-        monitor_btn_frame.pack(fill="x", padx=10, pady=5)
-        self.monitor_btn = ctk.CTkButton(monitor_btn_frame, text="Start Monitor", command=self.toggle_monitor, width=100)
-        self.monitor_btn.pack(side="left", padx=5)
-        ctk.CTkButton(monitor_btn_frame, text="Clear", command=self.clear_log, width=60).pack(side="left", padx=5)
-        ctk.CTkButton(monitor_btn_frame, text="Reset", command=self.reset_device, width=60).pack(side="left", padx=5)
-
-        ctk.CTkLabel(status_log_frame, text="Device Status", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
+        status_log_frame = ctk.CTkFrame(left_panel)
+        status_log_frame.pack(fill="x", padx=10, pady=5)
 
         # Status badges row
         badge_frame = ctk.CTkFrame(status_log_frame, fg_color="transparent")
         badge_frame.pack(fill="x", padx=10, pady=5)
 
         self.badges = {}
-        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data", "OTA"]
+        badge_names = ["FW", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data", "OTA"]
         for name in badge_names:
             badge = ctk.CTkLabel(badge_frame, text=name, fg_color="gray40", corner_radius=5,
                                  padx=8, pady=2, font=ctk.CTkFont(size=11))
@@ -210,30 +209,62 @@ class ESP32ReaderApp:
         self.status_text = ctk.CTkTextbox(status_log_frame, font=ctk.CTkFont(family="Consolas", size=11), height=80)
         self.status_text.pack(fill="x", padx=10, pady=5)
 
-        # Log frame (collapsible, hidden by default)
-        self.log_frame = ctk.CTkFrame(main)
-        self.log_frame.pack(fill="both", expand=True, pady=5)
-        self.log_visible = False
+        # Monitor buttons row
+        monitor_btn_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
+        monitor_btn_frame.pack(fill="x", padx=10, pady=5)
+        self.monitor_btn = ctk.CTkButton(monitor_btn_frame, text="Start Monitor", command=self.toggle_monitor, width=100)
+        self.monitor_btn.pack(side="left", padx=5)
+        ctk.CTkButton(monitor_btn_frame, text="Reset", command=self.reset_device, width=60).pack(side="left", padx=5)
 
-        log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
-        log_header.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(log_header, text="Serial Log", font=ctk.CTkFont(weight="bold")).pack(side="left")
-        self.collapse_btn = ctk.CTkButton(log_header, text="Show", command=self.toggle_log_visibility, width=50)
-        self.collapse_btn.pack(side="right")
-        ctk.CTkButton(log_header, text="Copy", command=self.copy_serial_log, width=50).pack(side="right", padx=5)
-
-        self.log_content = ctk.CTkFrame(self.log_frame, fg_color="transparent")
-        # Don't pack log_content - hidden by default
-
-        self.log_text = ctk.CTkTextbox(self.log_content, font=ctk.CTkFont(family="Consolas", size=11))
-        self.log_text.pack(fill="both", expand=True, padx=10, pady=5)
+        # Serial Log button (separate row for visibility)
+        log_btn_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
+        log_btn_frame.pack(fill="x", padx=10, pady=5)
+        self.log_panel_btn = ctk.CTkButton(log_btn_frame, text="Serial Log >>", command=self.toggle_log_panel, width=150)
+        self.log_panel_btn.pack(side="left", padx=5)
 
         # Status bar
-        status_frame = ctk.CTkFrame(main, fg_color="transparent")
-        status_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(status_frame, text="Status:").pack(side="left")
+        status_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
+        status_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(status_frame, text="Status:").pack(side="left", padx=5)
         self.status_label = ctk.CTkLabel(status_frame, textvariable=self.status_var, text_color="gray")
         self.status_label.pack(side="left", padx=5)
+
+        # Right panel (Serial Log) - hidden by default
+        self.right_panel = ctk.CTkFrame(container, width=self.panel_width)
+        self.right_panel.pack_propagate(False)  # Enforce fixed width
+        # Don't pack yet - hidden by default
+
+        # Serial log header
+        log_header = ctk.CTkFrame(self.right_panel, fg_color="transparent")
+        log_header.pack(fill="x", padx=10, pady=10)
+        ctk.CTkLabel(log_header, text="Serial Log", font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
+        ctk.CTkButton(log_header, text="X", command=self.toggle_log_panel, width=30, height=30).pack(side="right")
+        ctk.CTkButton(log_header, text="Copy", command=self.copy_serial_log, width=50).pack(side="right", padx=5)
+        ctk.CTkButton(log_header, text="Clear", command=self.clear_log, width=50).pack(side="right", padx=5)
+
+        # Serial log textbox
+        self.log_text = ctk.CTkTextbox(self.right_panel, font=ctk.CTkFont(family="Consolas", size=11))
+        self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # Legacy compatibility
+        self.log_visible = False
+        self.log_frame = self.right_panel
+        self.log_content = self.right_panel
+
+    def toggle_log_panel(self):
+        """Toggle the serial log side panel (CustomTkinter only)."""
+        if not hasattr(self, 'log_panel_visible'):
+            return  # Not applicable for ttk
+        if self.log_panel_visible:
+            # Hide panel
+            self.right_panel.pack_forget()
+            self.log_panel_btn.configure(text="Serial Log >>")
+            self.log_panel_visible = False
+        else:
+            # Show panel to the right
+            self.right_panel.pack(side="right", fill="both", padx=(0, 15), pady=15)
+            self.log_panel_btn.configure(text="<< Close")
+            self.log_panel_visible = True
 
     def _create_ttk_widgets(self):
         """Fallback to standard ttk widgets."""
@@ -330,7 +361,7 @@ class ESP32ReaderApp:
         badge_frame.pack(fill="x", pady=5)
 
         self.badges = {}
-        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data", "OTA"]
+        badge_names = ["FW", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data", "OTA"]
         for name in badge_names:
             badge = ttk.Label(badge_frame, text=name, background="gray", foreground="white",
                               padding=(5, 2))
@@ -550,10 +581,8 @@ class ESP32ReaderApp:
                         self.root.after(0, lambda f=filename, e=result.stderr: self.log_message(f"[WARN] Failed to download {f}: {e}"))
 
                 if success_count == len(downloads):
-                    # Update firmware_dir_var to point to the subfolder with downloaded files
-                    new_path = str(local_dir)
-                    self.root.after(0, lambda p=new_path: self.firmware_dir_var.set(p))
-                    self.root.after(0, lambda: self.set_status(f"Downloaded all files for {device_type} v{version}", "green"))
+                    # Don't update firmware_dir_var - keep base path so user can download different versions
+                    self.root.after(0, lambda: self.set_status(f"Downloaded {device_type} v{version} to {local_dir}", "green"))
                 else:
                     self.root.after(0, lambda: self.set_status(f"Downloaded {success_count}/{len(downloads)} files", "orange"))
 
@@ -624,14 +653,21 @@ class ESP32ReaderApp:
         if hasattr(self, 'badges'):
             for name in self.badges:
                 self.set_badge(name, False)
+            self.set_badge("FW", False, "FW")
             self.set_badge("Conn", False, "Conn")
 
     def parse_serial_line(self, line):
         """Parse serial line and return simplified status message if applicable."""
+        # Firmware version detection (from boot message or SoH)
+        # Patterns: "Grillo Pulse v1.0.0", "Grillo One v1.0.0", "fw=1.0.0", "version: 1.0.0"
+        fw_match = re.search(r'(?:Grillo (?:Pulse|One) v|fw=|[Vv]ersion[:\s]+)(\d+\.\d+\.\d+)', line)
+        if fw_match:
+            version = fw_match.group(1)
+            self.root.after(0, lambda v=version: self.set_badge("FW", True, v))
+            return f"Firmware: v{version}"
         # Boot/reset
         if "rst:0x" in line or "boot:" in line and "ESP-IDF" in line:
             self.root.after(0, self.reset_badges)
-            self.root.after(0, lambda: self.set_badge("Active", True))
             return "Device starting..."
         # WiFi connected
         if "wifi:connected with" in line:
@@ -761,21 +797,21 @@ class ESP32ReaderApp:
             self.start_monitor()
 
     def toggle_log_visibility(self):
-        """Toggle serial log visibility and resize window."""
+        """Toggle serial log visibility (ttk fallback only)."""
+        if not hasattr(self, 'collapse_btn'):
+            return  # Not applicable for CustomTkinter
         if self.log_visible:
             self.log_content.pack_forget()
             self.collapse_btn.configure(text="Show")
             self.log_visible = False
-            # Collapse window height
             self.root.update_idletasks()
             self.root.geometry(f"{self.root.winfo_width()}x{self.root.winfo_reqheight()}")
         else:
             self.log_content.pack(fill="both", expand=True)
             self.collapse_btn.configure(text="Hide")
             self.log_visible = True
-            # Restore window height
             self.root.update_idletasks()
-            self.root.geometry("")  # Reset to natural size
+            self.root.geometry("")
 
     def toggle_monitor(self):
         """Toggle serial monitor on/off."""
@@ -817,7 +853,6 @@ class ESP32ReaderApp:
             ser = serial.Serial(port, 115200, timeout=0.1)
             self.root.after(0, lambda: self.log_message(f"[Monitor] Connected to {port}"))
             self.root.after(0, lambda: self.add_device_status("Monitor connected"))
-            self.root.after(0, lambda: self.set_badge("Active", True))
             last_status = None
 
             while self.serial_running:
@@ -910,10 +945,19 @@ class ESP32ReaderApp:
                 device_type = self.device_type_var.get()
                 device_name = DEVICE_CONFIGS[device_type]["name"]
                 baud_rate = int(self.baud_rate_var.get())
-                self.root.after(0, lambda: self.set_status(f"Flashing {device_name}...", "blue"))
-                self.root.after(0, lambda: self.log_message(f"[INFO] Flashing {device_name} @ {baud_rate} baud from {self.firmware_dir_var.get()}..."))
+                version = self.firmware_version_var.get()
 
-                success, msg = flash_firmware(port, self.firmware_dir_var.get(), device_type, baud_rate)
+                # Construct firmware path: base_dir/device_type/version
+                base_dir = self.firmware_dir_var.get()
+                if version:
+                    firmware_path = str(Path(base_dir) / device_type / version)
+                else:
+                    firmware_path = base_dir  # Fallback if no version selected
+
+                self.root.after(0, lambda: self.set_status(f"Flashing {device_name}...", "blue"))
+                self.root.after(0, lambda fp=firmware_path: self.log_message(f"[INFO] Flashing {device_name} @ {baud_rate} baud from {fp}..."))
+
+                success, msg = flash_firmware(port, firmware_path, device_type, baud_rate)
                 if success:
                     self.root.after(0, lambda: self.log_message("[INFO] Firmware flashed successfully!"))
                     self.root.after(0, lambda: self.set_status("Flashed! Monitoring output...", "green"))
