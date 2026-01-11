@@ -1,0 +1,14 @@
+# Required
+esptool>=4.0
+
+# Recommended - for automatic ESP32 device detection
+pyserial>=3.5
+
+# Optional - for API registration (-r flag)
+requests>=2.25
+
+# Optional - for modern GUI appearance
+customtkinter>=5.0
+
+# Optional - for NiceGUI web interface
+nicegui>=1.4
