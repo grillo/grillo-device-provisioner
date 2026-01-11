@@ -9,6 +9,7 @@ Uses CustomTkinter for modern appearance.
 import threading
 import sys
 import time
+import re
 
 # Try CustomTkinter first, fall back to standard tkinter
 try:
@@ -52,7 +53,7 @@ class ESP32ReaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Grillo Device Provisioner")
-        self.root.minsize(520, 680)
+        self.root.minsize(520, 780)
 
         # Variables
         self.port_var = ctk.StringVar() if HAS_CUSTOMTKINTER else tk.StringVar()
@@ -146,35 +147,63 @@ class ESP32ReaderApp:
                                         height=40, font=ctk.CTkFont(size=14, weight="bold"))
         self.start_btn.pack(fill="x", pady=15)
 
-        # Result frame
-        result = ctk.CTkFrame(main)
-        result.pack(fill="x", pady=5)
+        # Device ID frame
+        id_container = ctk.CTkFrame(main)
+        id_container.pack(fill="x", pady=5)
 
-        ctk.CTkLabel(result, text="Result", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
-
-        id_frame = ctk.CTkFrame(result, fg_color="transparent")
-        id_frame.pack(fill="x", padx=10, pady=5)
+        id_frame = ctk.CTkFrame(id_container, fg_color="transparent")
+        id_frame.pack(fill="x", padx=10, pady=10)
         ctk.CTkLabel(id_frame, text="Device ID:", width=80, anchor="w").pack(side="left")
         self.id_label = ctk.CTkLabel(id_frame, textvariable=self.device_id_var,
                                       font=ctk.CTkFont(family="Consolas", size=14, weight="bold"))
         self.id_label.pack(side="left", padx=10)
-        ctk.CTkButton(id_frame, text="Copy", command=self.copy_device_id, width=60).pack(side="left")
+        ctk.CTkButton(id_frame, text="Copy", command=self.copy_device_id, width=60).pack(side="right")
 
-        # Log frame
-        log_frame = ctk.CTkFrame(main)
-        log_frame.pack(fill="both", expand=True, pady=10)
+        # Device status frame (simplified log)
+        status_log_frame = ctk.CTkFrame(main)
+        status_log_frame.pack(fill="x", pady=5)
 
-        ctk.CTkLabel(log_frame, text="Serial Log", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
-
-        self.log_text = ctk.CTkTextbox(log_frame, font=ctk.CTkFont(family="Consolas", size=11))
-        self.log_text.pack(fill="both", expand=True, padx=10, pady=5)
-
-        # Log buttons
-        log_btn_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_btn_frame.pack(fill="x", padx=10, pady=5)
-        self.monitor_btn = ctk.CTkButton(log_btn_frame, text="Start Monitor", command=self.toggle_monitor, width=100)
+        # Monitor buttons at top
+        monitor_btn_frame = ctk.CTkFrame(status_log_frame, fg_color="transparent")
+        monitor_btn_frame.pack(fill="x", padx=10, pady=5)
+        self.monitor_btn = ctk.CTkButton(monitor_btn_frame, text="Start Monitor", command=self.toggle_monitor, width=100)
         self.monitor_btn.pack(side="left", padx=5)
-        ctk.CTkButton(log_btn_frame, text="Clear", command=self.clear_log, width=60).pack(side="left", padx=5)
+        ctk.CTkButton(monitor_btn_frame, text="Clear", command=self.clear_log, width=60).pack(side="left", padx=5)
+        ctk.CTkButton(monitor_btn_frame, text="Reset", command=self.reset_device, width=60).pack(side="left", padx=5)
+
+        ctk.CTkLabel(status_log_frame, text="Device Status", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
+
+        # Status badges row
+        badge_frame = ctk.CTkFrame(status_log_frame, fg_color="transparent")
+        badge_frame.pack(fill="x", padx=10, pady=5)
+
+        self.badges = {}
+        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data"]
+        for name in badge_names:
+            badge = ctk.CTkLabel(badge_frame, text=name, fg_color="gray40", corner_radius=5,
+                                 padx=8, pady=2, font=ctk.CTkFont(size=11))
+            badge.pack(side="left", padx=2)
+            self.badges[name] = badge
+
+        self.status_text = ctk.CTkTextbox(status_log_frame, font=ctk.CTkFont(family="Consolas", size=11), height=80)
+        self.status_text.pack(fill="x", padx=10, pady=5)
+
+        # Log frame (collapsible)
+        self.log_frame = ctk.CTkFrame(main)
+        self.log_frame.pack(fill="both", expand=True, pady=5)
+        self.log_visible = True
+
+        log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+        log_header.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(log_header, text="Serial Log", font=ctk.CTkFont(weight="bold")).pack(side="left")
+        self.collapse_btn = ctk.CTkButton(log_header, text="Hide", command=self.toggle_log_visibility, width=50)
+        self.collapse_btn.pack(side="right")
+
+        self.log_content = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+        self.log_content.pack(fill="both", expand=True)
+
+        self.log_text = ctk.CTkTextbox(self.log_content, font=ctk.CTkFont(family="Consolas", size=11))
+        self.log_text.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Status bar
         status_frame = ctk.CTkFrame(main, fg_color="transparent")
@@ -234,33 +263,64 @@ class ESP32ReaderApp:
         self.start_btn = ttk.Button(main, text="Start", command=self.process_device)
         self.start_btn.grid(row=3, column=0, columnspan=2, pady=10, sticky="ew")
 
-        # Result
-        result = ttk.LabelFrame(main, text="Result", padding=10)
-        result.grid(row=4, column=0, columnspan=2, sticky="ew")
+        # Device ID
+        id_container = ttk.LabelFrame(main, text="Device ID", padding=10)
+        id_container.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
 
-        ttk.Label(result, text="Device ID:").grid(row=0, column=0, sticky="w")
-        self.id_label = ttk.Label(result, textvariable=self.device_id_var, font=("Consolas", 12, "bold"))
-        self.id_label.grid(row=0, column=1, sticky="w")
-        ttk.Button(result, text="Copy", command=self.copy_device_id).grid(row=0, column=2)
+        id_frame = ttk.Frame(id_container)
+        id_frame.pack(fill="x")
+        self.id_label = ttk.Label(id_frame, textvariable=self.device_id_var, font=("Consolas", 12, "bold"))
+        self.id_label.pack(side="left", padx=5)
+        ttk.Button(id_frame, text="Copy", command=self.copy_device_id).pack(side="right")
 
-        # Log
-        log_frame = ttk.LabelFrame(main, text="Serial Log", padding=10)
-        log_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=10)
-        main.rowconfigure(5, weight=1)
-        main.columnconfigure(1, weight=1)
+        # Device status (simplified log)
+        status_log_frame = ttk.LabelFrame(main, text="Device Status", padding=10)
+        status_log_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, font=("Consolas", 9))
-        self.log_text.pack(fill="both", expand=True)
-
-        log_btn_frame = ttk.Frame(log_frame)
-        log_btn_frame.pack(fill="x", pady=5)
-        self.monitor_btn = ttk.Button(log_btn_frame, text="Start Monitor", command=self.toggle_monitor)
+        # Monitor buttons at top
+        monitor_btn_frame = ttk.Frame(status_log_frame)
+        monitor_btn_frame.pack(fill="x", pady=5)
+        self.monitor_btn = ttk.Button(monitor_btn_frame, text="Start Monitor", command=self.toggle_monitor)
         self.monitor_btn.pack(side="left")
-        ttk.Button(log_btn_frame, text="Clear", command=self.clear_log).pack(side="left", padx=5)
+        ttk.Button(monitor_btn_frame, text="Clear", command=self.clear_log).pack(side="left", padx=5)
+        ttk.Button(monitor_btn_frame, text="Reset", command=self.reset_device).pack(side="left", padx=5)
+
+        # Status badges row
+        badge_frame = ttk.Frame(status_log_frame)
+        badge_frame.pack(fill="x", pady=5)
+
+        self.badges = {}
+        badge_names = ["Active", "Conn", "TimeSync", "ADXL", "ADS", "Messaging", "Data"]
+        for name in badge_names:
+            badge = ttk.Label(badge_frame, text=name, background="gray", foreground="white",
+                              padding=(5, 2))
+            badge.pack(side="left", padx=2)
+            self.badges[name] = badge
+
+        self.status_text = scrolledtext.ScrolledText(status_log_frame, height=4, font=("Consolas", 9))
+        self.status_text.pack(fill="x", expand=False)
+
+        # Log (collapsible)
+        self.log_frame = ttk.LabelFrame(main, text="Serial Log", padding=10)
+        self.log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=5)
+        main.rowconfigure(6, weight=1)
+        main.columnconfigure(1, weight=1)
+        self.log_visible = True
+
+        log_header = ttk.Frame(self.log_frame)
+        log_header.pack(fill="x")
+        self.collapse_btn = ttk.Button(log_header, text="Hide", command=self.toggle_log_visibility, width=6)
+        self.collapse_btn.pack(side="right")
+
+        self.log_content = ttk.Frame(self.log_frame)
+        self.log_content.pack(fill="both", expand=True)
+
+        self.log_text = scrolledtext.ScrolledText(self.log_content, height=8, font=("Consolas", 9))
+        self.log_text.pack(fill="both", expand=True)
 
         # Status
         status_frame = ttk.Frame(main)
-        status_frame.grid(row=6, column=0, columnspan=2, sticky="ew")
+        status_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
         ttk.Label(status_frame, text="Status:").pack(side="left")
         self.status_label = ttk.Label(status_frame, textvariable=self.status_var, foreground="gray")
         self.status_label.pack(side="left", padx=5)
@@ -334,11 +394,113 @@ class ESP32ReaderApp:
             self.log_text.see("end")
 
     def clear_log(self):
-        """Clear the log output."""
+        """Clear the log output and device status."""
         if HAS_CUSTOMTKINTER:
             self.log_text.delete("1.0", "end")
+            self.status_text.delete("1.0", "end")
         else:
             self.log_text.delete("1.0", "end")
+            self.status_text.delete("1.0", "end")
+        self.reset_badges()
+
+    def add_device_status(self, message):
+        """Add a simplified status message to the device status display."""
+        if HAS_CUSTOMTKINTER:
+            self.status_text.insert("end", message + "\n")
+            self.status_text.see("end")
+        else:
+            self.status_text.insert("end", message + "\n")
+            self.status_text.see("end")
+
+    def set_badge(self, name, active=True, text=None):
+        """Set badge color (green if active, gray if inactive) and optionally text."""
+        if not hasattr(self, 'badges') or name not in self.badges:
+            return
+        if HAS_CUSTOMTKINTER:
+            color = "green" if active else "gray40"
+            self.badges[name].configure(fg_color=color)
+            if text:
+                self.badges[name].configure(text=text)
+        else:
+            color = "green" if active else "gray"
+            self.badges[name].configure(background=color)
+            if text:
+                self.badges[name].configure(text=text)
+
+    def reset_badges(self):
+        """Reset all badges to inactive."""
+        if hasattr(self, 'badges'):
+            for name in self.badges:
+                self.set_badge(name, False)
+            self.set_badge("Conn", False, "Conn")
+
+    def parse_serial_line(self, line):
+        """Parse serial line and return simplified status message if applicable."""
+        # Boot/reset
+        if "rst:0x" in line or "boot:" in line and "ESP-IDF" in line:
+            self.root.after(0, self.reset_badges)
+            self.root.after(0, lambda: self.set_badge("Active", True))
+            return "Device starting..."
+        # WiFi connected
+        if "wifi:connected with" in line:
+            self.root.after(0, lambda: self.set_badge("Conn", True, "WiFi"))
+            ssid = line.split("connected with ")[1].split(",")[0] if "connected with " in line else "?"
+            return f"WiFi connected: {ssid}"
+        # Ethernet connected
+        if "Ethernet link up" in line or "ethernet attached" in line:
+            self.root.after(0, lambda: self.set_badge("Conn", True, "Ethernet"))
+            return "Ethernet connected"
+        # Cellular connected
+        if "cellular" in line.lower() and ("connected" in line.lower() or "attached" in line.lower()):
+            self.root.after(0, lambda: self.set_badge("Conn", True, "Cellular"))
+            return "Cellular connected"
+        # Connection type from SoH (conn=wifi, conn=ethernet, conn=cellular)
+        if "conn=" in line:
+            match = re.search(r'conn=(\w+)', line)
+            if match:
+                conn_type = match.group(1).capitalize()
+                self.root.after(0, lambda t=conn_type: self.set_badge("Conn", True, t))
+        # Got IP
+        if "sta ip:" in line or "WiFi got IP:" in line:
+            ip = line.split("ip: ")[1].split(",")[0] if "ip: " in line else "?"
+            return f"Got IP: {ip}"
+        # Time sync
+        if "Time synchronized:" in line or "[INITIAL SYNC]" in line:
+            self.root.after(0, lambda: self.set_badge("TimeSync", True))
+            return "Time synchronized"
+        # ADXL355 init
+        if "ADXL355 initialized" in line or "ADXL355 detected" in line:
+            self.root.after(0, lambda: self.set_badge("ADXL", True))
+            return "ADXL355 accelerometer detected"
+        # ADS1262 init (Pulse)
+        if "ADS1262 driver initialized" in line or "ADS1262 configuration completed" in line:
+            self.root.after(0, lambda: self.set_badge("ADS", True))
+            return "ADS1262 ADC initialized"
+        # Calibration
+        if "Calibration complete" in line or "calibration completed" in line or "DC bias calibration complete" in line:
+            return "Sensor calibration complete"
+        # Messaging init
+        if "Messaging initialized" in line:
+            self.root.after(0, lambda: self.set_badge("Messaging", True))
+            return "Messaging initialized"
+        # Device ID
+        if "Device ID:" in line and "main:" in line:
+            did = line.split("Device ID: ")[1].strip() if "Device ID: " in line else "?"
+            return f"Device ID: {did}"
+        # System ready
+        if "initialized successfully" in line and ("Grillo One" in line or "Grillo Pulse" in line or "System ready" in line):
+            return "System ready"
+        # SOH sent
+        if "SOH message sent" in line or ("SoH:" in line and "id=" in line):
+            return "SoH message sent"
+        # SOH received
+        if "SOH response" in line:
+            return "SoH response received"
+        # Data messages
+        if "[JSON]:" in line and ("geo=" in line or "ax=" in line):
+            self.root.after(0, lambda: self.set_badge("Data", True))
+            return "Sending data..."
+        return None
 
     def copy_device_id(self):
         """Copy device ID to clipboard."""
@@ -347,6 +509,53 @@ class ESP32ReaderApp:
             self.root.clipboard_clear()
             self.root.clipboard_append(device_id)
             self.set_status("Copied to clipboard!", "green")
+
+    def reset_device(self):
+        """Reset the ESP32 device via DTR/RTS pins."""
+        if not HAS_PYSERIAL:
+            self.set_status("pyserial not installed", "red")
+            return
+
+        port = self.port_var.get()
+        if not port:
+            self.set_status("No port selected", "red")
+            return
+
+        # Stop monitor temporarily if running
+        was_monitoring = self.serial_running
+        if was_monitoring:
+            self.stop_monitor()
+            time.sleep(0.2)
+
+        try:
+            ser = serial.Serial(port, 115200)
+            # Toggle DTR/RTS to reset ESP32
+            ser.dtr = False
+            ser.rts = True
+            time.sleep(0.1)
+            ser.rts = False
+            ser.close()
+            self.clear_log()
+            self.set_status("Device reset", "green")
+            self.add_device_status("Device reset triggered")
+        except serial.SerialException as e:
+            self.set_status(f"Reset failed: {e}", "red")
+
+        # Restart monitor if it was running
+        if was_monitoring:
+            time.sleep(0.5)
+            self.start_monitor()
+
+    def toggle_log_visibility(self):
+        """Toggle serial log visibility."""
+        if self.log_visible:
+            self.log_content.pack_forget()
+            self.collapse_btn.configure(text="Show")
+            self.log_visible = False
+        else:
+            self.log_content.pack(fill="both", expand=True)
+            self.collapse_btn.configure(text="Hide")
+            self.log_visible = True
 
     def toggle_monitor(self):
         """Toggle serial monitor on/off."""
@@ -387,6 +596,9 @@ class ESP32ReaderApp:
         try:
             ser = serial.Serial(port, 115200, timeout=0.1)
             self.root.after(0, lambda: self.log_message(f"[Monitor] Connected to {port}"))
+            self.root.after(0, lambda: self.add_device_status("Monitor connected"))
+            self.root.after(0, lambda: self.set_badge("Active", True))
+            last_status = None
 
             while self.serial_running:
                 if ser.in_waiting:
@@ -394,6 +606,15 @@ class ESP32ReaderApp:
                         line = ser.readline().decode('utf-8', errors='replace').strip()
                         if line:
                             self.root.after(0, lambda l=line: self.log_message(f"[DEVICE] {l}"))
+                            # Parse and show simplified status
+                            status = self.parse_serial_line(line)
+                            if status and status != last_status:
+                                # Avoid repeating "Sending data..." endlessly
+                                if status == "Sending data..." and last_status == "Sending data...":
+                                    pass
+                                else:
+                                    self.root.after(0, lambda s=status: self.add_device_status(s))
+                                    last_status = status
                     except Exception:
                         pass
                 time.sleep(0.01)

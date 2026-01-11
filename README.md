@@ -13,11 +13,15 @@ python esp32_device_reader.py
 
 <img src="device_provisioner.png" width="400">
 
+**Windows:** Download and run `Grillo Device Provisioner.exe` - no installation required.
+
+> **Note:** If your PC doesn't recognize the ESP32, install the USB driver: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) or [CH340](http://www.wch-ic.com/downloads/CH341SER_ZIP.html)
+
+**From source:**
 ```bash
 pip install customtkinter  # Optional: for modern dark theme
 python esp32_device_reader_gui.py
 ```
-Or double-click `run_gui.bat` (Windows).
 
 Features:
 - Read device ID (MAC address)
