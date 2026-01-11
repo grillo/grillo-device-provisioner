@@ -123,21 +123,17 @@ After flashing, serial output is shown for 10 seconds.
 
 ## GUI
 
-### Tkinter (built-in, no extra deps)
+![Grillo Device Provisioner](device_provisioner.png)
+
 ```bash
+pip install customtkinter  # Optional: for modern dark theme
 python esp32_device_reader_gui.py
 ```
 Or double-click `run_gui.bat` (Windows).
-
-### NiceGUI (modern web UI)
-```bash
-pip install nicegui
-python esp32_device_reader_nicegui.py
-```
-Opens in browser at http://localhost:8080
 
 Features:
 - Read device ID (MAC address)
 - Print label, register with API, save to CSV
 - Flash firmware with device type selection
 - Serial monitor to view device output
+- Auto-detects new devices on port refresh

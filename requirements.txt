@@ -9,6 +9,4 @@ requests>=2.25
 
 # Optional - for modern GUI appearance
 customtkinter>=5.0
-
-# Optional - for NiceGUI web interface
-nicegui>=1.4
+pywebview>=4.0

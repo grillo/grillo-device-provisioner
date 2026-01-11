@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Grillo Device Reader - GUI
+Grillo Device Provisioner - GUI
 
 Cross-platform GUI for provisioning ESP32 devices.
 Uses CustomTkinter for modern appearance.
@@ -51,7 +51,7 @@ except ImportError:
 class ESP32ReaderApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Grillo Device Reader")
+        self.root.title("Grillo Device Provisioner")
         self.root.minsize(520, 680)
 
         # Variables
@@ -71,6 +71,9 @@ class ESP32ReaderApp:
         self.serial_thread = None
         self.serial_running = False
 
+        # Track known ports for auto-selection
+        self.known_ports = set()
+
         self.create_widgets()
         self.refresh_ports()
 
@@ -87,7 +90,7 @@ class ESP32ReaderApp:
         main.pack(fill="both", expand=True, padx=15, pady=15)
 
         # Title
-        ctk.CTkLabel(main, text="Grillo Device Reader", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(0, 15))
+        ctk.CTkLabel(main, text="Grillo Device Provisioner", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(0, 15))
 
         # Port selection frame
         port_frame = ctk.CTkFrame(main)
@@ -104,7 +107,8 @@ class ESP32ReaderApp:
 
         ctk.CTkLabel(type_frame, text="Device Type:", width=100, anchor="w").pack(side="left", padx=5)
         self.type_combo = ctk.CTkComboBox(type_frame, variable=self.device_type_var,
-                                          values=list(DEVICE_CONFIGS.keys()), width=200, state="readonly")
+                                          values=list(DEVICE_CONFIGS.keys()), width=200, state="readonly",
+                                          command=lambda _: self.refresh_ports())
         self.type_combo.pack(side="left", padx=5)
 
         # Options frame
@@ -199,6 +203,7 @@ class ESP32ReaderApp:
         self.type_combo = ttk.Combobox(main, textvariable=self.device_type_var,
                                         values=list(DEVICE_CONFIGS.keys()), state="readonly")
         self.type_combo.grid(row=1, column=1, sticky="w", pady=5)
+        self.type_combo.bind("<<ComboboxSelected>>", lambda _: self.refresh_ports())
 
         # Options
         options = ttk.LabelFrame(main, text="Options", padding=10)
@@ -261,7 +266,7 @@ class ESP32ReaderApp:
         self.status_label.pack(side="left", padx=5)
 
     def refresh_ports(self):
-        """Refresh the list of available COM ports."""
+        """Refresh the list of available COM ports. Auto-selects new ports."""
         ports = []
         if HAS_PYSERIAL:
             for port in serial.tools.list_ports.comports():
@@ -275,10 +280,21 @@ class ESP32ReaderApp:
         else:
             self.port_combo["values"] = ports
 
-        if ports and not self.port_var.get():
-            self.port_var.set(ports[0])
+        # Detect new ports and auto-select
+        current_ports = set(ports)
+        new_ports = current_ports - self.known_ports
+        self.known_ports = current_ports
 
-        self.set_status(f"Found {len(ports)} port(s)")
+        if new_ports:
+            # Auto-select the new port
+            new_port = sorted(new_ports)[0]
+            self.port_var.set(new_port)
+            self.set_status(f"New device: {new_port}", "green")
+        elif ports and not self.port_var.get():
+            self.port_var.set(ports[0])
+            self.set_status(f"Found {len(ports)} port(s)")
+        else:
+            self.set_status(f"Found {len(ports)} port(s)")
 
     def browse_csv(self):
         """Open file dialog to select CSV file."""
