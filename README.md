@@ -9,10 +9,22 @@ pip install esptool pyserial
 python esp32_device_reader.py
 ```
 
-Or use the GUI:
+## GUI
+
+<img src="device_provisioner.png" width="400">
+
 ```bash
+pip install customtkinter  # Optional: for modern dark theme
 python esp32_device_reader_gui.py
 ```
+Or double-click `run_gui.bat` (Windows).
+
+Features:
+- Read device ID (MAC address)
+- Print label, register with API, save to CSV
+- Flash firmware with device type selection
+- Serial monitor to view device output
+- Auto-detects new devices on port refresh
 
 ## Usage
 
@@ -120,20 +132,3 @@ python esp32_device_reader.py -f -d one             # Flash One
 ```
 
 After flashing, serial output is shown for 10 seconds.
-
-## GUI
-
-![Grillo Device Provisioner](device_provisioner.png)
-
-```bash
-pip install customtkinter  # Optional: for modern dark theme
-python esp32_device_reader_gui.py
-```
-Or double-click `run_gui.bat` (Windows).
-
-Features:
-- Read device ID (MAC address)
-- Print label, register with API, save to CSV
-- Flash firmware with device type selection
-- Serial monitor to view device output
-- Auto-detects new devices on port refresh
