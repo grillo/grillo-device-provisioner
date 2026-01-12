@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(aws s3 ls:*)"
+      "Bash(aws s3 ls:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ]
   }
 }

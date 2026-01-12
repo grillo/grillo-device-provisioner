@@ -67,6 +67,8 @@ class ESP32ReaderApp:
         self.device_type_var = ctk.StringVar(value=DEFAULT_DEVICE_TYPE) if HAS_CUSTOMTKINTER else tk.StringVar(value=DEFAULT_DEVICE_TYPE)
         self.baud_rate_var = ctk.StringVar(value=str(DEFAULT_BAUD_RATE)) if HAS_CUSTOMTKINTER else tk.StringVar(value=str(DEFAULT_BAUD_RATE))
         self.print_var = ctk.BooleanVar() if HAS_CUSTOMTKINTER else tk.BooleanVar()
+        self.print_copies_var = ctk.StringVar(value="1") if HAS_CUSTOMTKINTER else tk.StringVar(value="1")
+        self.print_qr_var = ctk.BooleanVar(value=True) if HAS_CUSTOMTKINTER else tk.BooleanVar(value=True)
         self.register_var = ctk.BooleanVar() if HAS_CUSTOMTKINTER else tk.BooleanVar()
         self.csv_var = ctk.BooleanVar() if HAS_CUSTOMTKINTER else tk.BooleanVar()
         self.csv_file_var = ctk.StringVar(value=DEFAULT_CSV_FILE) if HAS_CUSTOMTKINTER else tk.StringVar(value=DEFAULT_CSV_FILE)
@@ -133,7 +135,13 @@ class ESP32ReaderApp:
 
         ctk.CTkLabel(options, text="Options", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
 
-        ctk.CTkCheckBox(options, text="Print label", variable=self.print_var).pack(anchor="w", padx=20, pady=2)
+        # Print label option with copies and QR toggle
+        print_frame = ctk.CTkFrame(options, fg_color="transparent")
+        print_frame.pack(fill="x", padx=20, pady=2)
+        ctk.CTkCheckBox(print_frame, text="Print label", variable=self.print_var, width=100).pack(side="left")
+        ctk.CTkComboBox(print_frame, variable=self.print_copies_var, values=["1", "2"], width=50, state="readonly").pack(side="left", padx=5)
+        ctk.CTkLabel(print_frame, text="x").pack(side="left")
+        ctk.CTkCheckBox(print_frame, text="QR", variable=self.print_qr_var, width=50).pack(side="left", padx=10)
         ctk.CTkCheckBox(options, text="Register with API", variable=self.register_var).pack(anchor="w", padx=20, pady=2)
 
         # CSV option
@@ -293,7 +301,13 @@ class ESP32ReaderApp:
         options = ttk.LabelFrame(main, text="Options", padding=10)
         options.grid(row=1, column=0, columnspan=2, sticky="ew", pady=10)
 
-        ttk.Checkbutton(options, text="Print label", variable=self.print_var).grid(row=0, column=0, sticky="w")
+        # Print label option with copies and QR toggle
+        print_frame = ttk.Frame(options)
+        print_frame.grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(print_frame, text="Print label", variable=self.print_var).pack(side="left")
+        ttk.Combobox(print_frame, textvariable=self.print_copies_var, values=["1", "2"], width=3, state="readonly").pack(side="left", padx=5)
+        ttk.Label(print_frame, text="x").pack(side="left")
+        ttk.Checkbutton(print_frame, text="QR", variable=self.print_qr_var).pack(side="left", padx=10)
         ttk.Checkbutton(options, text="Register with API", variable=self.register_var).grid(row=1, column=0, sticky="w")
 
         csv_frame = ttk.Frame(options)
@@ -933,9 +947,11 @@ class ESP32ReaderApp:
                 append_to_csv(device_id, self.csv_file_var.get())
 
             if self.print_var.get():
-                self.root.after(0, lambda: self.set_status("Printing label...", "blue"))
-                self.root.after(0, lambda: self.log_message("[INFO] Printing label..."))
-                print_label(device_id)
+                copies = int(self.print_copies_var.get())
+                with_qr = self.print_qr_var.get()
+                self.root.after(0, lambda: self.set_status(f"Printing {copies}x label...", "blue"))
+                self.root.after(0, lambda: self.log_message(f"[INFO] Printing {copies}x label {'with QR' if with_qr else 'text only'}..."))
+                print_label(device_id, copies=copies, with_qr=with_qr)
 
             # Flash firmware if requested
             if self.flash_var.get():

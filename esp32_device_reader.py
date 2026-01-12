@@ -250,37 +250,54 @@ def register_device(device_id: str, api_server: str = API_SERVER) -> bool:
             return False
 
 
-def print_label(mac_address: str) -> bool:
+def print_label(mac_address: str, copies: int = 1, with_qr: bool = True) -> bool:
     """
-    Print a label with the MAC address and QR code.
+    Print a label with the MAC address and optionally a QR code.
 
     Args:
         mac_address: The MAC address to print
+        copies: Number of copies to print (default 1)
+        with_qr: Include QR code on label (default True)
 
     Returns:
         True if printing succeeded, False otherwise.
     """
-    log(f"Printing label for MAC: {mac_address}")
+    qr_str = "with QR" if with_qr else "text only"
+    log(f"Printing {copies}x label(s) ({qr_str}) for MAC: {mac_address}")
 
-    label_spec = f"""LABELLE-LABEL-SPEC-VERSION:1
+    if with_qr:
+        label_spec = f"""LABELLE-LABEL-SPEC-VERSION:1
 QR:{mac_address}
+TEXT:{mac_address}
+"""
+    else:
+        label_spec = f"""LABELLE-LABEL-SPEC-VERSION:1
 TEXT:{mac_address}
 """
 
     try:
-        result = subprocess.run(
-            ["labelle", "--batch", "--font-scale", "40"],
-            input=label_spec,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        success_count = 0
+        for i in range(copies):
+            result = subprocess.run(
+                ["labelle", "--batch", "--font-scale", "40"],
+                input=label_spec,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                success_count += 1
+            else:
+                log(f"ERROR: Failed to print label {i+1}: {result.stderr}")
 
-        if result.returncode == 0:
-            log("Label printed successfully!")
+        if success_count == copies:
+            log(f"All {copies} label(s) printed successfully!")
+            return True
+        elif success_count > 0:
+            log(f"WARNING: Only {success_count}/{copies} labels printed")
             return True
         else:
-            log(f"ERROR: Failed to print label: {result.stderr}")
+            log("ERROR: Failed to print any labels")
             return False
     except FileNotFoundError:
         log("ERROR: 'labelle' command not found. Install it to enable label printing.")
