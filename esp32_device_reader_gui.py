@@ -507,13 +507,16 @@ class ESP32ReaderApp:
                 ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
 
                 versions = []
-                for content in root.findall('.//s3:Contents', ns):
-                    key = content.find('s3:Key', ns).text
-                    # Look for version folders like "grillo-pulse/1.0.0/"
-                    if key.startswith(prefix) and key.endswith('/'):
-                        parts = key[len(prefix):].rstrip('/').split('/')
-                        if len(parts) == 1 and parts[0] and re.match(r'^\d+\.\d+\.\d+$', parts[0]):
-                            versions.append(parts[0])
+                # With delimiter, subfolders appear in CommonPrefixes
+                for cp in root.findall('.//s3:CommonPrefixes', ns):
+                    prefix_elem = cp.find('s3:Prefix', ns)
+                    if prefix_elem is not None:
+                        key = prefix_elem.text
+                        # Extract version from "grillo-pulse/1.0.0/"
+                        if key.startswith(prefix):
+                            version = key[len(prefix):].rstrip('/')
+                            if re.match(r'^\d+\.\d+\.\d+$', version):
+                                versions.append(version)
 
                 versions = list(set(versions))  # Remove duplicates
                 versions.sort(key=lambda v: [int(x) if x.isdigit() else x for x in v.split(".")], reverse=True)
