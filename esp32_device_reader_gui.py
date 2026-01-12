@@ -12,6 +12,8 @@ import time
 import re
 import os
 import subprocess
+import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Try CustomTkinter first, fall back to standard tkinter
@@ -50,8 +52,8 @@ try:
 except ImportError:
     HAS_PYSERIAL = False
 
-# S3 firmware bucket
-S3_FIRMWARE_BUCKET = "s3://grillo.firmware"
+# S3 firmware bucket (public HTTPS access)
+S3_FIRMWARE_URL = "https://s3.amazonaws.com/grillo.firmware"
 
 
 class ESP32ReaderApp:
@@ -490,30 +492,30 @@ class ESP32ReaderApp:
         self.refresh_firmware_versions()
 
     def refresh_firmware_versions(self):
-        """Fetch available firmware versions from S3."""
+        """Fetch available firmware versions from S3 via HTTPS."""
         device_type = self.device_type_var.get()
-        s3_path = f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/"
+        prefix = f"grillo-{device_type}/"
+        list_url = f"{S3_FIRMWARE_URL}/?prefix={prefix}&delimiter=/"
 
         def fetch_versions():
             try:
-                # Hide console window on Windows
-                kwargs = {"capture_output": True, "text": True, "timeout": 10}
-                if sys.platform == "win32":
-                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(["aws", "s3", "ls", s3_path], **kwargs)
-                if result.returncode != 0:
-                    self.root.after(0, lambda: self.set_status("Failed to list S3 versions", "red"))
-                    return
+                with urllib.request.urlopen(list_url, timeout=10) as response:
+                    xml_data = response.read().decode('utf-8')
+
+                # Parse S3 XML response
+                root = ET.fromstring(xml_data)
+                ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
 
                 versions = []
-                for line in result.stdout.strip().split("\n"):
-                    if line.strip() and "PRE" in line:
-                        # Parse "PRE 1.0.0/" format
-                        parts = line.strip().split()
-                        if len(parts) >= 2:
-                            version = parts[-1].rstrip("/")
-                            versions.append(version)
+                for content in root.findall('.//s3:Contents', ns):
+                    key = content.find('s3:Key', ns).text
+                    # Look for version folders like "grillo-pulse/1.0.0/"
+                    if key.startswith(prefix) and key.endswith('/'):
+                        parts = key[len(prefix):].rstrip('/').split('/')
+                        if len(parts) == 1 and parts[0] and re.match(r'^\d+\.\d+\.\d+$', parts[0]):
+                            versions.append(parts[0])
 
+                versions = list(set(versions))  # Remove duplicates
                 versions.sort(key=lambda v: [int(x) if x.isdigit() else x for x in v.split(".")], reverse=True)
                 self.firmware_versions = versions
 
@@ -532,10 +534,8 @@ class ESP32ReaderApp:
 
                 self.root.after(0, update_ui)
 
-            except FileNotFoundError:
-                self.root.after(0, lambda: self.set_status("AWS CLI not found", "red"))
-            except subprocess.TimeoutExpired:
-                self.root.after(0, lambda: self.set_status("S3 request timed out", "red"))
+            except urllib.error.URLError as e:
+                self.root.after(0, lambda: self.set_status(f"Network error: {e.reason}", "red"))
             except Exception as e:
                 self.root.after(0, lambda: self.set_status(f"Error: {e}", "red"))
 
@@ -543,7 +543,7 @@ class ESP32ReaderApp:
         threading.Thread(target=fetch_versions, daemon=True).start()
 
     def download_firmware(self):
-        """Download selected firmware version from S3, including bootloader and partition table."""
+        """Download selected firmware version from S3 via HTTPS."""
         version = self.firmware_version_var.get()
         if not version:
             self.set_status("Select a firmware version first", "red")
@@ -559,26 +559,24 @@ class ESP32ReaderApp:
         # Files to download: firmware (versioned) + bootloader & partition (device-level)
         firmware_name = f"grillo-{device_type}-firmware.bin"
         downloads = [
-            (f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/{version}/{firmware_name}", firmware_name),
-            (f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/bootloader.bin", "bootloader.bin"),
-            (f"{S3_FIRMWARE_BUCKET}/grillo-{device_type}/partition-table.bin", "partition-table.bin"),
+            (f"{S3_FIRMWARE_URL}/grillo-{device_type}/{version}/{firmware_name}", firmware_name),
+            (f"{S3_FIRMWARE_URL}/grillo-{device_type}/bootloader.bin", "bootloader.bin"),
+            (f"{S3_FIRMWARE_URL}/grillo-{device_type}/partition-table.bin", "partition-table.bin"),
         ]
 
         def do_download():
             try:
-                kwargs = {"capture_output": True, "text": True, "timeout": 60}
-                if sys.platform == "win32":
-                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
                 success_count = 0
-                for s3_source, filename in downloads:
+                for url, filename in downloads:
                     local_path = Path(local_dir) / filename
-                    result = subprocess.run(["aws", "s3", "cp", s3_source, str(local_path)], **kwargs)
-                    if result.returncode == 0:
+                    try:
+                        urllib.request.urlretrieve(url, str(local_path))
                         success_count += 1
                         self.root.after(0, lambda f=filename: self.log_message(f"[INFO] Downloaded {f}"))
-                    else:
-                        self.root.after(0, lambda f=filename, e=result.stderr: self.log_message(f"[WARN] Failed to download {f}: {e}"))
+                    except urllib.error.HTTPError as e:
+                        self.root.after(0, lambda f=filename, e=e: self.log_message(f"[WARN] Failed to download {f}: HTTP {e.code}"))
+                    except urllib.error.URLError as e:
+                        self.root.after(0, lambda f=filename, e=e: self.log_message(f"[WARN] Failed to download {f}: {e.reason}"))
 
                 if success_count == len(downloads):
                     # Don't update firmware_dir_var - keep base path so user can download different versions
@@ -586,10 +584,6 @@ class ESP32ReaderApp:
                 else:
                     self.root.after(0, lambda: self.set_status(f"Downloaded {success_count}/{len(downloads)} files", "orange"))
 
-            except FileNotFoundError:
-                self.root.after(0, lambda: self.set_status("AWS CLI not found", "red"))
-            except subprocess.TimeoutExpired:
-                self.root.after(0, lambda: self.set_status("Download timed out", "red"))
             except Exception as e:
                 self.root.after(0, lambda: self.set_status(f"Error: {e}", "red"))
 
