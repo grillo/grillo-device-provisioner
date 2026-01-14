@@ -13,7 +13,6 @@ import re
 import os
 import subprocess
 import urllib.request
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Try CustomTkinter first, fall back to standard tkinter
@@ -52,8 +51,9 @@ try:
 except ImportError:
     HAS_PYSERIAL = False
 
-# S3 firmware bucket (public HTTPS access)
-S3_FIRMWARE_URL = "https://s3.amazonaws.com/grillo.firmware"
+# Firmware download URL
+FIRMWARE_URL = "https://firmware.cloud.grillo.io"
+
 
 
 class ESP32ReaderApp:
@@ -77,8 +77,7 @@ class ESP32ReaderApp:
         self.firmware_dir_var = ctk.StringVar(value=default_firmware_dir) if HAS_CUSTOMTKINTER else tk.StringVar(value=default_firmware_dir)
         self.device_id_var = ctk.StringVar(value="—") if HAS_CUSTOMTKINTER else tk.StringVar(value="—")
         self.status_var = ctk.StringVar(value="Ready") if HAS_CUSTOMTKINTER else tk.StringVar(value="Ready")
-        self.firmware_version_var = ctk.StringVar(value="") if HAS_CUSTOMTKINTER else tk.StringVar(value="")
-        self.firmware_versions = []  # Available S3 versions
+        self.firmware_version_var = ctk.StringVar(value="1.0.0") if HAS_CUSTOMTKINTER else tk.StringVar(value="1.0.0")
 
         # Serial monitoring
         self.serial_thread = None
@@ -158,7 +157,7 @@ class ESP32ReaderApp:
         ctk.CTkEntry(flash_frame, textvariable=self.firmware_dir_var, width=150).pack(side="left", padx=5)
         ctk.CTkButton(flash_frame, text="...", command=self.browse_firmware, width=30).pack(side="left")
 
-        # Firmware selector: device type + version dropdown + refresh
+        # Firmware selector: device type + version input
         firmware_frame = ctk.CTkFrame(options, fg_color="transparent")
         firmware_frame.pack(fill="x", padx=20, pady=5)
         ctk.CTkLabel(firmware_frame, text="Firmware:", width=120, anchor="w").pack(side="left")
@@ -166,15 +165,14 @@ class ESP32ReaderApp:
         self.pulse_btn.pack(side="left", padx=2)
         self.one_btn = ctk.CTkButton(firmware_frame, text="One", width=80, command=lambda: self.select_device_type("one"))
         self.one_btn.pack(side="left", padx=2)
-        self.version_combo = ctk.CTkComboBox(firmware_frame, variable=self.firmware_version_var, width=100, state="readonly")
-        self.version_combo.pack(side="left", padx=(10, 2))
-        ctk.CTkButton(firmware_frame, text="Refresh", command=self.refresh_firmware_versions, width=60).pack(side="left", padx=2)
+        ctk.CTkLabel(firmware_frame, text="v", width=15).pack(side="left", padx=(10, 0))
+        ctk.CTkEntry(firmware_frame, textvariable=self.firmware_version_var, width=80).pack(side="left", padx=2)
 
         # Download button
         download_frame = ctk.CTkFrame(options, fg_color="transparent")
         download_frame.pack(fill="x", padx=20, pady=2)
         ctk.CTkLabel(download_frame, text="", width=120).pack(side="left")  # Spacer to align with above
-        ctk.CTkButton(download_frame, text="Download from S3", command=self.download_firmware, width=150).pack(side="left", padx=2)
+        ctk.CTkButton(download_frame, text="Download", command=self.download_firmware, width=150).pack(side="left", padx=2)
 
         # Baud rate
         baud_frame = ctk.CTkFrame(options, fg_color="transparent")
@@ -322,7 +320,7 @@ class ESP32ReaderApp:
         ttk.Entry(flash_frame, textvariable=self.firmware_dir_var, width=15).pack(side="left", padx=5)
         ttk.Button(flash_frame, text="...", command=self.browse_firmware, width=3).pack(side="left")
 
-        # Firmware selector: device type + version dropdown + refresh
+        # Firmware selector: device type + version input
         firmware_frame = ttk.Frame(options)
         firmware_frame.grid(row=4, column=0, sticky="w", pady=5)
         ttk.Label(firmware_frame, text="Firmware:").pack(side="left")
@@ -330,15 +328,14 @@ class ESP32ReaderApp:
         self.pulse_btn.pack(side="left", padx=2)
         self.one_btn = ttk.Button(firmware_frame, text="One", width=8, command=lambda: self.select_device_type("one"))
         self.one_btn.pack(side="left", padx=2)
-        self.version_combo = ttk.Combobox(firmware_frame, textvariable=self.firmware_version_var, width=10, state="readonly")
-        self.version_combo.pack(side="left", padx=(10, 2))
-        ttk.Button(firmware_frame, text="Refresh", command=self.refresh_firmware_versions, width=7).pack(side="left", padx=2)
+        ttk.Label(firmware_frame, text="v").pack(side="left", padx=(10, 0))
+        ttk.Entry(firmware_frame, textvariable=self.firmware_version_var, width=10).pack(side="left", padx=2)
 
         # Download button
         download_frame = ttk.Frame(options)
         download_frame.grid(row=5, column=0, sticky="w", pady=2)
         ttk.Label(download_frame, text="", width=10).pack(side="left")  # Spacer
-        ttk.Button(download_frame, text="Download from S3", command=self.download_firmware, width=18).pack(side="left", padx=2)
+        ttk.Button(download_frame, text="Download", command=self.download_firmware, width=18).pack(side="left", padx=2)
 
         baud_frame = ttk.Frame(options)
         baud_frame.grid(row=6, column=0, sticky="w")
@@ -500,67 +497,12 @@ class ESP32ReaderApp:
         # ttk doesn't support easy color changes, button text indicates selection
 
     def on_device_type_change(self):
-        """Handle device type change - refresh ports and versions."""
+        """Handle device type change - refresh ports."""
         self.update_device_type_buttons()
         self.refresh_ports()
-        self.refresh_firmware_versions()
-
-    def refresh_firmware_versions(self):
-        """Fetch available firmware versions from S3 via HTTPS."""
-        device_type = self.device_type_var.get()
-        prefix = f"grillo-{device_type}/"
-        list_url = f"{S3_FIRMWARE_URL}/?prefix={prefix}&delimiter=/"
-
-        def fetch_versions():
-            try:
-                with urllib.request.urlopen(list_url, timeout=10) as response:
-                    xml_data = response.read().decode('utf-8')
-
-                # Parse S3 XML response
-                root = ET.fromstring(xml_data)
-                ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
-
-                versions = []
-                # With delimiter, subfolders appear in CommonPrefixes
-                for cp in root.findall('.//s3:CommonPrefixes', ns):
-                    prefix_elem = cp.find('s3:Prefix', ns)
-                    if prefix_elem is not None:
-                        key = prefix_elem.text
-                        # Extract version from "grillo-pulse/1.0.0/"
-                        if key.startswith(prefix):
-                            version = key[len(prefix):].rstrip('/')
-                            if re.match(r'^\d+\.\d+\.\d+$', version):
-                                versions.append(version)
-
-                versions = list(set(versions))  # Remove duplicates
-                versions.sort(key=lambda v: [int(x) if x.isdigit() else x for x in v.split(".")], reverse=True)
-                self.firmware_versions = versions
-
-                def update_ui():
-                    if HAS_CUSTOMTKINTER:
-                        self.version_combo.configure(values=versions)
-                    else:
-                        self.version_combo["values"] = versions
-                    if versions:
-                        # Default to 1.0.0 if available, otherwise first in list
-                        default_version = "1.0.0" if "1.0.0" in versions else versions[0]
-                        self.firmware_version_var.set(default_version)
-                        self.set_status(f"Found {len(versions)} firmware versions", "green")
-                    else:
-                        self.set_status("No firmware versions found", "gray")
-
-                self.root.after(0, update_ui)
-
-            except urllib.error.URLError as e:
-                self.root.after(0, lambda: self.set_status(f"Network error: {e.reason}", "red"))
-            except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"Error: {e}", "red"))
-
-        self.set_status("Fetching firmware versions...", "blue")
-        threading.Thread(target=fetch_versions, daemon=True).start()
 
     def download_firmware(self):
-        """Download selected firmware version from S3 via HTTPS."""
+        """Download selected firmware version."""
         version = self.firmware_version_var.get()
         if not version:
             self.set_status("Select a firmware version first", "red")
@@ -576,9 +518,9 @@ class ESP32ReaderApp:
         # Files to download: firmware (versioned) + bootloader & partition (device-level)
         firmware_name = f"grillo-{device_type}-firmware.bin"
         downloads = [
-            (f"{S3_FIRMWARE_URL}/grillo-{device_type}/{version}/{firmware_name}", firmware_name),
-            (f"{S3_FIRMWARE_URL}/grillo-{device_type}/bootloader.bin", "bootloader.bin"),
-            (f"{S3_FIRMWARE_URL}/grillo-{device_type}/partition-table.bin", "partition-table.bin"),
+            (f"{FIRMWARE_URL}/grillo-{device_type}/{version}/{firmware_name}", firmware_name),
+            (f"{FIRMWARE_URL}/grillo-{device_type}/bootloader.bin", "bootloader.bin"),
+            (f"{FIRMWARE_URL}/grillo-{device_type}/partition-table.bin", "partition-table.bin"),
         ]
 
         def do_download():
