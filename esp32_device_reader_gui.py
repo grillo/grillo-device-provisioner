@@ -36,6 +36,7 @@ from esp32_device_reader import (
     print_label,
     append_to_csv,
     flash_firmware,
+    get_esptool_command,
     DEFAULT_CSV_FILE,
     DEVICE_CONFIGS,
     DEFAULT_DEVICE_TYPE,
@@ -223,6 +224,7 @@ class ESP32ReaderApp:
         self.monitor_btn = ctk.CTkButton(monitor_btn_frame, text="Start Monitor", command=self.toggle_monitor, width=100)
         self.monitor_btn.pack(side="left", padx=5)
         ctk.CTkButton(monitor_btn_frame, text="Reset", command=self.reset_device, width=60).pack(side="left", padx=5)
+        ctk.CTkButton(monitor_btn_frame, text="Clear NVS", command=self.clear_nvs, width=80).pack(side="left", padx=5)
 
         # Serial Log button (separate row for visibility)
         log_btn_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
@@ -368,6 +370,7 @@ class ESP32ReaderApp:
         self.monitor_btn.pack(side="left")
         ttk.Button(monitor_btn_frame, text="Clear", command=self.clear_log).pack(side="left", padx=5)
         ttk.Button(monitor_btn_frame, text="Reset", command=self.reset_device).pack(side="left", padx=5)
+        ttk.Button(monitor_btn_frame, text="Clear NVS", command=self.clear_nvs).pack(side="left", padx=5)
 
         # Status badges row
         badge_frame = ttk.Frame(status_log_frame)
@@ -528,8 +531,18 @@ class ESP32ReaderApp:
                 success_count = 0
                 for url, filename in downloads:
                     local_path = Path(local_dir) / filename
+                    # Add cache-busting timestamp
+                    cache_bust_url = f"{url}?t={int(time.time())}"
+                    self.root.after(0, lambda u=url: self.log_message(f"[INFO] Fetching {u}"))
                     try:
-                        urllib.request.urlretrieve(url, str(local_path))
+                        # Use request with no-cache headers
+                        req = urllib.request.Request(cache_bust_url, headers={
+                            'Cache-Control': 'no-cache, no-store, must-revalidate',
+                            'Pragma': 'no-cache',
+                        })
+                        with urllib.request.urlopen(req, timeout=30) as response:
+                            with open(local_path, 'wb') as f:
+                                f.write(response.read())
                         success_count += 1
                         self.root.after(0, lambda f=filename: self.log_message(f"[INFO] Downloaded {f}"))
                     except urllib.error.HTTPError as e:
@@ -748,6 +761,60 @@ class ESP32ReaderApp:
         if was_monitoring:
             time.sleep(0.5)
             self.start_monitor()
+
+    def clear_nvs(self):
+        """Clear NVS (Non-Volatile Storage) partition using esptool."""
+        port = self.port_var.get()
+        if not port:
+            self.set_status("No port selected", "red")
+            return
+
+        # Stop monitor temporarily if running
+        was_monitoring = self.serial_running
+        if was_monitoring:
+            self.stop_monitor()
+            time.sleep(0.2)
+
+        def do_clear():
+            try:
+                # NVS partition standard location: 0x9000, size: 0x6000 (24KB)
+                self.root.after(0, lambda: self.set_status("Clearing NVS...", "blue"))
+                self.root.after(0, lambda: self.log_message("[INFO] Erasing NVS partition..."))
+
+                esptool_cmd = get_esptool_command()
+                result = subprocess.run(
+                    esptool_cmd + ["--port", port, "erase_region", "0x9000", "0x6000"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                if result.returncode == 0:
+                    self.root.after(0, lambda: self.set_status("NVS cleared successfully", "green"))
+                    self.root.after(0, lambda: self.log_message("[INFO] NVS partition erased"))
+                    self.root.after(0, lambda: self.add_device_status("NVS cleared"))
+                else:
+                    error_msg = result.stderr if result.stderr else "Unknown error"
+                    self.root.after(0, lambda: self.set_status("NVS clear failed", "red"))
+                    self.root.after(0, lambda msg=error_msg: self.log_message(f"[ERROR] {msg}"))
+
+            except FileNotFoundError:
+                self.root.after(0, lambda: self.set_status("esptool not found", "red"))
+                self.root.after(0, lambda: self.log_message("[ERROR] esptool not found. Install: pip install esptool"))
+            except subprocess.TimeoutExpired:
+                self.root.after(0, lambda: self.set_status("NVS clear timeout", "red"))
+                self.root.after(0, lambda: self.log_message("[ERROR] Operation timed out"))
+            except Exception as e:
+                self.root.after(0, lambda: self.set_status(f"Error: {e}", "red"))
+                self.root.after(0, lambda msg=str(e): self.log_message(f"[ERROR] {msg}"))
+            finally:
+                # Restart monitor if it was running
+                if was_monitoring:
+                    time.sleep(0.5)
+                    self.root.after(0, self.start_monitor)
+
+        # Run in background thread
+        threading.Thread(target=do_clear, daemon=True).start()
 
     def toggle_log_visibility(self):
         """Toggle serial log visibility (ttk fallback only)."""
