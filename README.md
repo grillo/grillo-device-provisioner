@@ -1,140 +1,99 @@
 # Grillo Device Provisioner
 
-Reads MAC addresses from ESP32 devices. Optionally registers with API, saves to CSV, and prints labels.
+Factory tool for provisioning Grillo sensors. Flashes firmware, reads device MAC addresses, registers devices in cloud inventory, and prints identification labels.
 
-## Quick Start
+## 🚀 Quick Start
 
-```bash
-pip install esptool pyserial
-python esp32_device_reader.py
-```
-
-## GUI
-
-<img src="device_provisioner.png" width="400">
-
-**Windows:** Download and run `Grillo Device Provisioner.exe` - no installation required.
-
-> **Note:** If your PC doesn't recognize the ESP32, install the USB driver: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) or [CH340](http://www.wch-ic.com/downloads/CH341SER_ZIP.html)
+**Windows (recommended):** Download and run `Grillo Device Provisioner.exe` — no installation required.
 
 **From source:**
 ```bash
-pip install customtkinter  # Optional: for modern dark theme
-python esp32_device_reader_gui.py
+pip install -r requirements.txt
+python main.py            # Launch GUI
+python main.py --cli      # CLI mode
 ```
 
+> If your PC doesn't recognize the ESP32, install the USB driver: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) or [CH340](http://www.wch-ic.com/downloads/CH341SER_ZIP.html)
+
+## 🏗️ Provisioning Flow
+
+```
+Firmware CDN ─→ Download firmware ─→ Flash ESP32 via USB ─→ Read MAC address
+(S3+CloudFront)                                                    │
+                                                                   ▼
+                                              Print DYMO label ←─ Register device
+                                              (ID, type, QR)      (cloud-backend API)
+```
+
+1. **Select device type** (Pulse or One) and firmware version
+2. **Download firmware** from `firmware.cloud.grillo.io`
+3. **Flash firmware** via esptool over USB serial
+4. **Read MAC address** from flashed device (becomes device ID)
+5. **Register device** via cloud-backend inventory API
+6. **Print label** with device ID, type, firmware version, QR code
+
+## 🖥️ GUI
+
+<img src="device_provisioner.png" width="400">
+
 Features:
-- Read device ID (MAC address)
-- Print label, register with API, save to CSV
-- Flash firmware with device type selection
+- Device type selection and firmware version picker
+- One-click flash, register, and label print
 - Serial monitor with simplified device status view
-- Status badges: Active, Connection type, TimeSync, ADXL, ADS, Messaging, Data
-- Reset device button (hardware reset via DTR/RTS)
+- Status badges: Active, Connection, TimeSync, ADXL, ADS, Messaging, Data
+- Hardware reset button (DTR/RTS)
 - Auto-detects new devices on port refresh
 
-## Usage
+## ⌨️ CLI Usage
 
 ```bash
-python esp32_device_reader.py [OPTIONS] [port]
+python main.py --cli [OPTIONS] [port]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-p` | Print label (requires labelle + DYMO printer) |
-| `-r` | Register with API |
+| `-r` | Register with cloud-backend API |
 | `-c [FILE]` | Save to CSV (default: devices.csv) |
 | `-f [DIR]` | Flash firmware from directory (default: firmware/) |
 | `-d TYPE` | Device type: `pulse` or `one` (default: pulse) |
 
-## Platform Setup
+## ⚡ Firmware Flashing
 
-### Windows
-
-1. Install Python dependencies:
-   ```bash
-   pip install esptool pyserial requests
-   ```
-
-2. Install USB driver if needed:
-   - [CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
-   - [CH340 driver](http://www.wch-ic.com/downloads/CH341SER_ZIP.html)
-
-3. For label printing, install labelle and use [Zadig](https://zadig.akeo.ie/) to set DYMO driver to WinUSB
-
-### Linux
+| Device | Chip | Flash Size | Firmware File |
+|--------|------|------------|---------------|
+| Pulse | ESP32-S3 | 16MB | grillo-pulse-firmware.bin |
+| One | ESP32 | 8MB | grillo-one-firmware.bin |
 
 ```bash
-pip install esptool pyserial requests
-
-# Add user to dialout group for serial access
-sudo usermod -a -G dialout $USER
-# Log out and back in
-
-# For label printing
-pip install labelle
+python main.py --cli -f                    # Flash Pulse (default)
+python main.py --cli -f -d one             # Flash One
 ```
 
-### macOS
+Supports both merged binaries (recommended) and individual partition files. See `--help` for details.
+
+## 🛠️ Development
 
 ```bash
-pip install esptool pyserial requests
+pip install -r requirements.txt
+python main.py                # Run from source
 
-# For label printing
-pip install labelle
+# Build Windows executable
+pyinstaller main.spec
 ```
 
-## Firmware Flashing
+### Platform Notes
 
-### Device Types
+| Platform | Serial Access | Label Printing |
+|----------|--------------|----------------|
+| Windows | Install CP210x/CH340 driver | DYMO + Zadig (WinUSB) |
+| Linux | `sudo usermod -a -G dialout $USER` | `pip install labelle` |
+| macOS | Built-in drivers | `pip install labelle` |
 
-| Device | Chip | Flash Size | App Offset | Firmware File |
-|--------|------|------------|------------|---------------|
-| Pulse  | ESP32-S3 | 16MB | 0x20000 | grillo-pulse-firmware.bin |
-| One    | ESP32 | 8MB | 0x20000 | grillo-one-firmware.bin |
+## 🔗 Related Repos
 
-### Option 1: Merged Binary (Recommended)
-
-Place a single merged binary in `firmware/`:
-```
-firmware/
-└── merged_firmware.bin
-```
-
-Generate merged binary for **Pulse** (16MB):
-```bash
-esptool.py --chip esp32s3 merge_bin -o firmware/merged_firmware.bin \
-  --flash_mode dio --flash_size 16MB \
-  0x0 build/bootloader/bootloader.bin \
-  0x8000 build/partition_table/partition-table.bin \
-  0x20000 build/grillo-pulse-firmware.bin
-```
-
-Generate merged binary for **One** (8MB):
-```bash
-esptool.py --chip esp32 merge_bin -o firmware/merged_firmware.bin \
-  --flash_mode dio --flash_size 8MB \
-  0x0 build/bootloader/bootloader.bin \
-  0x8000 build/partition_table/partition-table.bin \
-  0x20000 build/grillo-one-firmware.bin
-```
-
-### Option 2: Individual Files
-
-Place individual files in the firmware directory:
-```
-firmware/
-├── bootloader.bin          (Pulse: 0x0, One: 0x1000)
-├── partition-table.bin     (0x8000)
-└── grillo-pulse-firmware.bin or grillo-one-firmware.bin (0x20000)
-```
-
-**Note:** ESP32-S3 (Pulse) bootloader goes at 0x0, ESP32 (One) bootloader goes at 0x1000.
-
-### Flash Command
-
-```bash
-python esp32_device_reader.py -f                    # Flash Pulse (default)
-python esp32_device_reader.py -f -d one             # Flash One
-```
-
-After flashing, serial output is shown for 10 seconds.
+| Repo | Relationship |
+|------|-------------|
+| [grillo-firmware-pulse](../grillo-firmware-pulse) | Firmware binary flashed onto Pulse devices |
+| [grillo-firmware-one](../grillo-firmware-one) | Firmware binary flashed onto One devices |
+| [grillo-cloud-backend](../grillo-cloud-backend) | Inventory API for device registration |
