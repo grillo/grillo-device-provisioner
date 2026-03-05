@@ -6,11 +6,29 @@ Factory tool for provisioning Grillo sensors. Flashes firmware, reads device MAC
 
 **Windows (recommended):** Download and run `Grillo Device Provisioner.exe` — no installation required.
 
-**From source:**
+**Linux:**
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Grant serial port access (log out and back in after)
+sudo usermod -a -G dialout $USER
+
+# Launch GUI
+python esp32_device_reader_gui.py
+
+# Or use CLI mode
+python esp32_device_reader.py
+```
+
+> On Linux, you may also need to install `python3-tk` for GUI support:
+> `sudo apt install python3-tk` (Debian/Ubuntu) or `sudo dnf install python3-tkinter` (Fedora)
+
+**From source (other platforms):**
 ```bash
 pip install -r requirements.txt
-python main.py            # Launch GUI
-python main.py --cli      # CLI mode
+python esp32_device_reader_gui.py    # Launch GUI
+python esp32_device_reader.py        # CLI mode
 ```
 
 > If your PC doesn't recognize the ESP32, install the USB driver: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) or [CH340](http://www.wch-ic.com/downloads/CH341SER_ZIP.html)
@@ -47,7 +65,7 @@ Features:
 ## ⌨️ CLI Usage
 
 ```bash
-python main.py --cli [OPTIONS] [port]
+python esp32_device_reader.py [OPTIONS] [port]
 ```
 
 | Flag | Description |
@@ -66,8 +84,8 @@ python main.py --cli [OPTIONS] [port]
 | One | ESP32 | 8MB | grillo-one-firmware.bin |
 
 ```bash
-python main.py --cli -f                    # Flash Pulse (default)
-python main.py --cli -f -d one             # Flash One
+python esp32_device_reader.py -f                    # Flash Pulse (default)
+python esp32_device_reader.py -f -d one             # Flash One
 ```
 
 Supports both merged binaries (recommended) and individual partition files. See `--help` for details.
@@ -76,7 +94,7 @@ Supports both merged binaries (recommended) and individual partition files. See 
 
 ```bash
 pip install -r requirements.txt
-python main.py                # Run from source
+python esp32_device_reader_gui.py    # Run from source
 
 # Build Windows executable
 pyinstaller main.spec
