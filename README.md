@@ -62,6 +62,12 @@ Features:
 - Hardware reset button (DTR/RTS)
 - Auto-detects new devices on port refresh
 
+## 📶 Reset NVS (clear APN / WiFi)
+
+The **Clear NVS** button erases the device's `nvs` partition (`0x9000`, size `0x6000`), where the firmware stores the cellular **APN** (`cellular_creds/apn`) and **WiFi credentials**. After clearing, the device re-opens its WiFi setup portal (`GrilloPulse-XXXX` → `http://192.168.4.1`) on the next boot, so a technician can pick the APN / WiFi from a phone — no scripts needed.
+
+> ⚠️ This wipes the **entire** NVS partition, including station metadata. That's fine — the server re-pushes station metadata on the next check-in.
+
 ## ⌨️ CLI Usage
 
 ```bash
