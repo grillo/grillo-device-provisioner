@@ -52,7 +52,7 @@ Firmware CDN ─→ Download firmware ─→ Flash ESP32 via USB ─→ Read MAC
 
 ## 🖥️ GUI
 
-<img src="device_provisioner.png" width="400">
+<img src="device_provisioner_v2.png" width="400">
 
 Features:
 - Device type selection and firmware version picker
