@@ -4,7 +4,7 @@ Factory tool for provisioning Grillo sensors. Flashes firmware, reads device MAC
 
 ## 🚀 Quick Start
 
-**Windows (recommended):** Download and run `Grillo Device Provisioner.exe` — no installation required.
+**Windows (recommended):** [Download the latest `Grillo Device Provisioner.exe`](https://github.com/grillo/grillo-device-provisioner/releases/latest) and run it — no installation required.
 
 **Linux:**
 ```bash
@@ -101,10 +101,11 @@ Supports both merged binaries (recommended) and individual partition files. See 
 ```bash
 pip install -r requirements.txt
 python esp32_device_reader_gui.py    # Run from source
-
-# Build Windows executable
-pyinstaller main.spec
 ```
+
+**Build the Windows executable:** run `build_exe.bat` on a Windows machine — it produces `dist\Grillo Device Provisioner.exe`.
+
+> Releasing: pushing a `v*` tag triggers the [Build Windows EXE](.github/workflows/build-exe.yml) GitHub Action, which builds the exe on a Windows runner and attaches it to a [GitHub Release](https://github.com/grillo/grillo-device-provisioner/releases). This is what the Windows download link above points at, so technicians always get the current build.
 
 ### Platform Notes
 
